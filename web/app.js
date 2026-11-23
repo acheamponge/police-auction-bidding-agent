@@ -1,0 +1,467 @@
+// The script for every page of the demo UI. No libraries. Each page is the same
+// shell with a different fragment; document.body.dataset.page says which one.
+// Everything that came from a lot page or from the model is put on screen as
+// text, never as HTML.
+"use strict";
+
+const PAGE = document.body.dataset.page;
+const $ = (id) => document.getElementById(id);
+const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+const money = (n) => (n === null || n === undefined ? "not read" : usd.format(n));
+const small = (n) => "$" + n.toFixed(4);
+const plural = (n, word) => n + " " + word + (n === 1 ? "" : "s");
+
+let busy = false;
+let autoTimer = null;
+let settingsShown = false;
+
+function el(tag, props, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(props || {})) {
+    if (key === "class") node.className = value;
+    else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+    else if (value !== null && value !== undefined) node.setAttribute(key, value);
+  }
+  for (const child of children.flat()) {
+    if (child === null || child === undefined || child === false) continue;
+    node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  }
+  return node;
+}
+
+function setStatus(text, isError) {
+  const status = $("status");
+  status.textContent = text || "";
+  status.className = isError ? "status error" : "status";
+}
+
+function setBusy(on) {
+  busy = on;
+  for (const control of document.querySelectorAll("main button, main input, main select")) control.disabled = on;
+}
+
+// Send a change to the server (or just read the state) and redraw from the reply.
+async function send(path, body, working) {
+  if (busy) return false;
+  setBusy(true);
+  setStatus(working);
+  try {
+    const response = await fetch(path, {
+      method: body === undefined ? "GET" : "POST",
+      headers: body === undefined ? {} : { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      setStatus(data.error || "Something went wrong.", true);
+      return false;
+    }
+    setBusy(false);
+    render(data);
+    setStatus("");
+    return true;
+  } catch (error) {
+    setStatus("Could not reach the app. Is `python3 app.py` still running?", true);
+    return false;
+  } finally {
+    setBusy(false);
+  }
+}
+
+const numberOrNull = (input) => (input.value.trim() === "" ? null : Number(input.value));
+
+// ---- shared pieces ---------------------------------------------------------
+
+function kpi(label, value, sub, tone) {
+  return el("div", { class: "card kpi" + (tone ? " " + tone : "") },
+    el("div", { class: "eyebrow" }, label),
+    el("div", { class: "kpi-value" }, value),
+    sub && el("div", { class: "kpi-sub" }, sub));
+}
+
+// What a result comes to, once the policy gate has had its say.
+function outcome(view) {
+  if (!view || !view.evaluation) return { key: "none", label: "NOT CHECKED", pill: "", card: "card-slate" };
+  const verdict = view.evaluation.verdict;
+  if (verdict === "BID" && view.policy_decision === "DRY_RUN") return { key: "bid", label: "BID", pill: "pill-go", card: "card-good" };
+  if (verdict === "BID") return { key: "hold", label: "BLOCKED BY POLICY", pill: "pill-cond", card: "card-amber" };
+  if (verdict === "NO_BID") return { key: "nobid", label: "NO BID", pill: "pill-prop", card: "card-slate" };
+  return { key: "hold", label: "HOLD FOR YOU", pill: "pill-cond", card: "card-amber" };
+}
+
+const verdictPill = (view) => {
+  const o = outcome(view);
+  return el("span", { class: "pill verdict " + o.pill }, o.label);
+};
+
+function plan(view) {
+  const e = view.evaluation;
+  if (e.verdict !== "BID" || e.bid_amount === null) return null;
+  const allowed = view.policy_decision === "DRY_RUN";
+  return el("div", { class: allowed ? "plan" : "plan blocked" },
+    el("div", { class: "eyebrow" }, allowed ? "Bid plan · not sent" : "Stopped by the spending policy"),
+    el("div", { class: "plan-figure" }, (e.bid_is_proxy ? "Proxy maximum " : "Bid ") + money(e.bid_amount)),
+    el("p", { class: "plan-detail" }, "All-in at most " + money(e.all_in_at_bid) + "."),
+    e.bid_note && el("p", { class: "plan-detail" }, e.bid_note),
+    !allowed && el("p", { class: "plan-detail" }, view.policy_note));
+}
+
+function fact(label, value, sub) {
+  return el("div", {}, el("dt", {}, label), el("dd", {}, value, sub && el("span", { class: "sub" }, sub)));
+}
+
+function facts(e) {
+  const premium = e.premium_stated ? e.premium_pct.toFixed(2) + "%" : e.premium_absent ? "None" : "Unreadable";
+  const premiumNote = e.premium_stated ? "read off the lot page"
+    : e.premium_absent ? "none in the auction table" : "mentioned, but no rate found";
+  return el("dl", { class: "facts" },
+    fact("Current price", money(e.current_price)),
+    fact("Next bid to lead", money(e.next_bid), e.bid_increment !== null && "increment " + money(e.bid_increment)),
+    fact("All-in at next bid", e.all_in_at_next_bid === null ? "n/a" : money(e.all_in_at_next_bid),
+      e.all_in_at_next_bid === null && "cannot be worked out yet"),
+    fact("Highest bid in your max", e.max_hammer === null ? "n/a" : money(e.max_hammer)),
+    fact("Buyer's premium", premium, premiumNote),
+    fact("Tax", e.tax_rate === null ? "Not set" : (e.tax_rate * 100).toFixed(2) + "%", "an assumption"),
+    fact("Delivery", e.shipping_method ? money(e.shipping_cost) : "None usable",
+      e.shipping_method && e.shipping_method +
+        (e.pickup_cost_usd !== null ? ", incl. " + money(e.pickup_cost_usd) + " pickup cost" : "")));
+}
+
+function ember(e) {
+  if (!e.ember_stance && e.value_estimate_low === null) return null;
+  const hasValue = e.value_estimate_low !== null && e.value_estimate_high !== null;
+  let gap = null;
+  if (hasValue && e.all_in_at_next_bid !== null) {
+    const side = (value) => money(Math.abs(value - e.all_in_at_next_bid)) +
+      (e.all_in_at_next_bid <= value ? " below" : " above");
+    gap = "The next bid's all-in is " + side(e.value_estimate_low) + " the low estimate and " +
+      side(e.value_estimate_high) + " the high estimate.";
+  }
+  const stancePill = e.ember_stance === "bid" ? "pill-plan" : e.ember_stance ? "pill-cond" : "";
+  return el("div", { class: "ember" },
+    el("div", { class: "ember-head" },
+      el("strong", {}, e.simulated ? "LOCAL STAND-IN" : "MUSE EMBER"),
+      e.ember_stance && el("span", { class: "pill " + stancePill }, "stance: " + e.ember_stance),
+      e.simulated && el("span", { class: "pill" }, "no model called")),
+    e.ember_reasoning && el("p", {}, e.ember_reasoning),
+    hasValue && el("p", {},
+      el("span", { class: "value" }, "Worth " + money(e.value_estimate_low) + " to " + money(e.value_estimate_high) + ". "),
+      el("span", { class: "muted" }, e.value_basis || "")),
+    gap && el("p", { class: "muted" }, gap));
+}
+
+function flags(e) {
+  if (!e.risk_flags || !e.risk_flags.length) return null;
+  return el("details", {},
+    el("summary", {}, plural(e.risk_flags.length, "risk flag")),
+    el("ul", { class: "flags" }, e.risk_flags.map((flag) => el("li", {}, flag))));
+}
+
+const resultBody = (view) => {
+  const e = view.evaluation;
+  return [el("p", { class: "reason" }, e.reason), plan(view), facts(e), ember(e), flags(e)];
+};
+
+const lotLink = (url, text) => el("a", { href: url, target: "_blank", rel: "noopener noreferrer" }, text);
+const statusWord = (e) => (e.status === "live" ? "Live" : e.status === "ended" ? "Ended" : "Status unknown");
+
+// ---- the frame every page shares -------------------------------------------
+
+function renderChrome(state) {
+  const live = state.mode === "live";
+  for (const pill of document.querySelectorAll(".mode-pill")) {
+    pill.textContent = live ? "live · " + state.model : "fixture mode · no model";
+    pill.className = "pill mode-pill " + (live ? "pill-go pill-live" : "pill-cond");
+    pill.title = live ? "Each new or changed lot costs one call to " + state.model + "."
+      : "No API key, or started with --fixture. A local stand-in reads the page: no second opinion, no value estimate.";
+  }
+}
+
+function setUpNav() {
+  for (const link of document.querySelectorAll("[data-nav]")) {
+    if (link.dataset.nav === PAGE) link.setAttribute("aria-current", "page");
+  }
+  const button = $("menu-button");
+  const menu = $("mobile-menu");
+  const toggle = (open) => {
+    menu.hidden = !open;
+    button.setAttribute("aria-expanded", String(open));
+    button.setAttribute("aria-label", open ? "Close menu" : "Open menu");
+  };
+  button.addEventListener("click", () => toggle(menu.hidden));
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape") toggle(false); });
+}
+
+// ---- Overview ---------------------------------------------------------------
+
+function renderOverview(state) {
+  const ledger = state.ledger;
+  const counts = { bid: 0, hold: 0, nobid: 0, none: 0 };
+  for (const lot of state.lots) counts[outcome(lot).key] += 1;
+  const ready = state.lots.find((lot) => outcome(lot).key === "bid");
+
+  const lead = $("overview-lead");
+  if (ready) {
+    const e = ready.evaluation;
+    lead.replaceChildren(
+      el("div", { class: "eyebrow eyebrow-dot" }, "Ready for your review"),
+      el("div", { class: "lead-row" },
+        el("div", {},
+          el("div", { class: "lead-title" }, e.title || ready.url),
+          el("p", { class: "lead-note" }, e.bid_note || e.reason)),
+        el("div", { class: "lead-stats" },
+          el("div", {}, el("div", { class: "eyebrow" }, e.bid_is_proxy ? "Proxy maximum" : "Bid"), el("span", { class: "num" }, money(e.bid_amount))),
+          el("div", {}, el("div", { class: "eyebrow" }, "All-in at most"), el("span", { class: "num" }, money(e.all_in_at_bid))),
+          el("div", {}, el("div", { class: "eyebrow" }, "Next bid"), el("span", { class: "num" }, money(e.next_bid))))));
+  } else {
+    const checked = state.lots.length - counts.none;
+    let eyebrow = "Start here";
+    let title = "No lots on your list yet";
+    let note = "Run the demo to watch four real lots go through the agent, or paste a lot link on the Lots page.";
+    if (state.lots.length && !checked) {
+      eyebrow = "Waiting on you";
+      title = plural(counts.none, "lot") + " on your list, not checked yet";
+      note = "Lots are not re-read when the app starts, so nothing is spent until you ask. Open Lots and press Check all now.";
+    } else if (state.lots.length) {
+      eyebrow = "Nothing clears right now";
+      title = plural(counts.hold, "lot") + " held for you, " + counts.nobid + " not worth a bid";
+      note = "Open Lots to see why each one was held. The agent holds whenever it cannot be sure.";
+    }
+    lead.replaceChildren(
+      el("div", { class: "eyebrow eyebrow-dot" }, eyebrow),
+      el("div", { class: "lead-title" }, title),
+      el("p", { class: "lead-note" }, note));
+  }
+
+  $("overview-kpis").replaceChildren(
+    kpi("Model budget spent", small(ledger.total_spent_usd),
+      "of " + usd.format(ledger.budget_usd) + ", " + small(ledger.remaining_usd) + " left"),
+    kpi("Model calls", String(ledger.live_calls), plural(ledger.simulated_calls, "simulated run")),
+    kpi("Your lots", String(state.lots.length),
+      counts.bid + " bid plan" + (counts.bid === 1 ? "" : "s") + ", " + counts.hold + " held, " + counts.nobid + " no bid" +
+        (counts.none ? ", " + counts.none + " not checked" : ""),
+      counts.bid ? "good" : undefined),
+    kpi("Mode", state.mode === "live" ? "Live" : "Fixture",
+      state.mode === "live" ? state.model : "no model is called", state.mode === "live" ? "good" : "warn"));
+}
+
+// ---- Demo -------------------------------------------------------------------
+
+function renderDemo(state) {
+  const demo = state.demo;
+  const live = state.mode === "live";
+  $("demo-note").textContent =
+    "Demo assumptions: " + (demo.tax_rate * 100).toFixed(0) + "% tax and " + money(demo.pickup_cost_usd) +
+    " pickup cost on top of the page's fee (a local buyer). " +
+    (live ? "On the live model a first run makes up to eight calls, well under one cent in total. Running it again costs nothing unless a page changed."
+      : "Fixture mode: no model is called, so there is no second read and no value estimate. Start the app with a key to see Muse Ember's part.");
+  $("demo-run").textContent = demo.ran_at ? "Run it again" : "Run the demo";
+
+  const finals = demo.lots.map((lot) => lot.as_if_live || lot.listed).filter(Boolean);
+  const counts = { bid: 0, hold: 0, nobid: 0, none: 0 };
+  for (const view of finals) counts[outcome(view).key] += 1;
+  $("demo-kpis").replaceChildren(...(demo.ran_at ? [
+    kpi("Lots run", String(finals.length), "of " + demo.lots.length + ", at " + new Date(demo.ran_at).toLocaleTimeString()),
+    kpi("Bid plans", String(counts.bid), "math clears and nothing objects", counts.bid ? "good" : undefined),
+    kpi("Held for you", String(counts.hold), "a person decides", counts.hold ? "warn" : undefined),
+    kpi("No bid", String(counts.nobid), "ended, or over the max"),
+  ] : []));
+
+  $("demo-lots").replaceChildren(...demo.lots.map((lot) => {
+    const final = lot.as_if_live || lot.listed;
+    const o = outcome(final);
+    const runs = [];
+    if (lot.listed) {
+      runs.push(el("div", { class: "run" + (lot.as_if_live ? "" : " single") },
+        el("div", { class: "run-head" }, el("span", { class: "eyebrow" }, "As listed · " + statusWord(lot.listed.evaluation)), verdictPill(lot.listed)),
+        resultBody(lot.listed)));
+    }
+    if (lot.as_if_live) {
+      runs.push(el("div", { class: "run" },
+        el("div", { class: "run-head" }, el("span", { class: "eyebrow" }, "As if live"), verdictPill(lot.as_if_live)),
+        resultBody(lot.as_if_live)));
+    }
+    return el("article", { class: "card card-accent lot " + (lot.error ? "card-crit" : o.card) },
+      el("div", { class: "lot-head" },
+        el("div", { class: "lot-title" },
+          el("h3", {}, lotLink(lot.url, lot.label)),
+          el("p", { class: "lot-sub" }, "All-in max " + money(lot.all_in_max))),
+        lot.error ? el("span", { class: "pill verdict pill-nogo" }, "ERROR") : verdictPill(final)),
+      lot.error && el("p", { class: "error-box" }, lot.error),
+      !lot.error && !lot.listed && el("p", { class: "reason muted" }, "Not run yet."),
+      runs.length ? el("div", { class: "runs" }, runs) : null);
+  }));
+}
+
+// ---- Lots -------------------------------------------------------------------
+
+function maxForm(lot) {
+  const input = el("input", { type: "number", min: "0", step: "0.01", inputmode: "decimal",
+    placeholder: "none", value: lot.all_in_max === null ? null : lot.all_in_max });
+  const suggested = lot.evaluation && lot.evaluation.suggested_all_in_max;
+  return el("form", { class: "max-form",
+      onsubmit: (event) => {
+        event.preventDefault();
+        send("/api/lots/max", { url: lot.url, all_in_max: numberOrNull(input) }, "Re-working the verdict…");
+      } },
+    el("label", { class: "field" },
+      el("span", {}, "Your all-in max" + (suggested ? " (suggested " + money(suggested) + ")" : "")),
+      el("span", { class: "money-input" }, input)),
+    el("button", { class: "btn", type: "submit" }, "Update"));
+}
+
+function lotCard(lot) {
+  const e = lot.evaluation;
+  const actions = el("div", { class: "lot-actions" },
+    lot.checked_at && el("span", { class: "checked" },
+      "Checked " + new Date(lot.checked_at).toLocaleTimeString() + (lot.used_model ? " · model called" : "")),
+    el("button", { class: "btn btn-quiet", type: "button",
+      onclick: () => send("/api/lots/check", { url: lot.url }, "Re-reading the lot page…") }, "Check again"),
+    el("button", { class: "btn btn-quiet", type: "button",
+      onclick: () => send("/api/lots/remove", { url: lot.url }, "Removing…") }, "Remove"));
+
+  if (!e) {
+    return el("article", { class: "card card-accent lot " + (lot.error ? "card-crit" : "card-slate") },
+      el("div", { class: "lot-head" },
+        el("div", { class: "lot-title" },
+          el("h3", {}, lotLink(lot.url, lot.url)),
+          el("p", { class: "lot-sub" }, lot.error ? "Could not be evaluated" : "Not checked since the app started")),
+        el("span", { class: "pill verdict " + (lot.error ? "pill-nogo" : "") }, lot.error ? "ERROR" : "NOT CHECKED")),
+      lot.error && el("p", { class: "error-box" }, lot.error),
+      el("div", { class: "lot-foot" }, maxForm(lot), actions));
+  }
+  return el("article", { class: "card card-accent lot " + outcome(lot).card },
+    el("div", { class: "lot-head" },
+      el("div", { class: "lot-title" },
+        el("h3", {}, lotLink(lot.url, e.title || lot.url)),
+        el("p", { class: "lot-sub" }, statusWord(e))),
+      verdictPill(lot)),
+    resultBody(lot),
+    el("div", { class: "lot-foot" }, maxForm(lot), actions));
+}
+
+function renderLots(state) {
+  const s = state.settings;
+  $("lots-assumptions").textContent =
+    "Using your assumptions: tax " + (s.tax_rate === null ? "not set (every lot will be held)" : (s.tax_rate * 100).toFixed(2) + "%") +
+    ", pickup cost " + (s.pickup_cost_usd === null ? "not set (never pick up)" : money(s.pickup_cost_usd)) +
+    ", delivery " + s.shipping_preference + ". Change them on the Policy page.";
+  $("lots-title").textContent = "Your lots (" + state.lots.length + ")";
+  $("lots").replaceChildren(...(state.lots.length ? state.lots.map(lotCard)
+    : [el("div", { class: "card empty" }, "No lots yet. Paste a PropertyRoom lot link above to see what the agent would do.")]));
+}
+
+// ---- Policy -------------------------------------------------------------------
+
+function renderPolicy(state) {
+  const policy = state.policy;
+  $("policy-kpis").replaceChildren(
+    kpi("Per-lot cap", usd.format(policy.tx_cap_usd), "all-in, card and PayPal ceiling"),
+    kpi("Session budget", usd.format(policy.session_budget_usd), "across every lot in a session"),
+    kpi("Committed", usd.format(policy.exposure_usd), "nothing commits in dry-run"),
+    kpi("Room left", usd.format(policy.headroom_usd), "the most one bid plan may cost", "good"));
+  $("rule-cap").textContent = usd.format(policy.tx_cap_usd);
+  $("rule-budget").textContent = usd.format(policy.session_budget_usd);
+  $("rule-reserve").textContent = policy.allow_reserve_lots
+    ? "Reserve lots are allowed, and get a plain bid instead of a proxy."
+    : "Reserve lots are held for you.";
+  if (!settingsShown) {
+    const s = state.settings;
+    $("set-tax").value = s.tax_rate === null ? "" : +(s.tax_rate * 100).toFixed(4);
+    $("set-pickup").value = s.pickup_cost_usd === null ? "" : s.pickup_cost_usd;
+    $("set-shipping").value = s.shipping_preference;
+    settingsShown = true;
+  }
+}
+
+// ---- Ledger -------------------------------------------------------------------
+
+function lotName(url) {
+  if (url === "api-parameter-probe") return "API settings check";
+  const match = /\/l\/([^/]+)\//.exec(url);
+  return match ? match[1].replace(/-/g, " ") : url;
+}
+
+function renderLedger(state) {
+  const ledger = state.ledger;
+  const entries = state.ledger_entries;
+  const evaluations = entries.filter((entry) => !entry.simulated && entry.lot_url !== "api-parameter-probe" && entry.cost_usd > 0);
+  const average = evaluations.length
+    ? evaluations.reduce((sum, entry) => sum + entry.cost_usd, 0) / evaluations.length : null;
+  const share = Math.min(100, (ledger.total_spent_usd / ledger.budget_usd) * 100);
+
+  $("ledger-kpis").replaceChildren(
+    kpi("Spent", small(ledger.total_spent_usd), "of " + usd.format(ledger.budget_usd)),
+    kpi("Left", small(ledger.remaining_usd), "a call that could cross it is never sent", "good"),
+    kpi("Model calls", String(ledger.live_calls), plural(ledger.simulated_calls, "simulated run")),
+    kpi("Per evaluation", average === null ? "n/a" : small(average),
+      average === null ? "no live evaluations yet"
+        : "so $10 buys about " + Math.floor(ledger.budget_usd / average).toLocaleString() + " of them"));
+  $("budget-share").textContent = share.toFixed(2) + "%";
+  $("budget-bar").style.width = share + "%";
+  $("budget-meter").setAttribute("aria-label", "Model budget used: " + share.toFixed(2) + " percent");
+
+  const head = el("thead", {}, el("tr", {},
+    el("th", {}, "When"), el("th", {}, "Lot"), el("th", { class: "r" }, "Tokens in"),
+    el("th", { class: "r" }, "Tokens out"), el("th", { class: "r" }, "Cost"), el("th", {}, "Kind")));
+  const rows = entries.slice().reverse().map((entry) => el("tr", {},
+    el("td", {}, new Date(entry.ts).toLocaleString()),
+    el("td", {}, lotName(entry.lot_url)),
+    el("td", { class: "r" }, entry.input_tokens.toLocaleString()),
+    el("td", { class: "r" }, entry.output_tokens.toLocaleString()),
+    el("td", { class: "r" }, "$" + entry.cost_usd.toFixed(6)),
+    el("td", {}, el("span", { class: "pill " + (entry.simulated ? "" : "pill-plan") }, entry.simulated ? "simulated" : "live"))));
+  $("ledger-table").replaceChildren(head, el("tbody", {},
+    rows.length ? rows : el("tr", {}, el("td", { colspan: "6" }, "No calls yet."))));
+}
+
+// ---- wiring ---------------------------------------------------------------
+
+const RENDERERS = { overview: renderOverview, demo: renderDemo, lots: renderLots, policy: renderPolicy, ledger: renderLedger };
+
+function render(state) {
+  renderChrome(state);
+  if (RENDERERS[PAGE]) RENDERERS[PAGE](state);
+}
+
+function wire() {
+  if (PAGE === "demo") {
+    $("demo-run").addEventListener("click", () => send("/api/demo/run", {},
+      "Fetching the lot pages and working out verdicts. On the live model this can take up to a minute…"));
+  }
+  if (PAGE === "lots") {
+    $("add-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const added = await send("/api/lots",
+        { url: $("add-url").value, all_in_max: numberOrNull($("add-max")) },
+        "Reading the lot page and working out a verdict. This can take a few seconds…");
+      if (added) {
+        $("add-url").value = "";
+        $("add-max").value = "";
+      }
+    });
+    $("check-all").addEventListener("click", () => send("/api/lots/check-all", {}, "Re-reading every live lot…"));
+    $("auto-check").addEventListener("change", () => {
+      clearInterval(autoTimer);
+      const minutes = Number($("auto-check").value);
+      if (minutes > 0) {
+        autoTimer = setInterval(() => send("/api/lots/check-all", {}, "Re-reading every live lot…"), minutes * 60 * 1000);
+      }
+    });
+  }
+  if (PAGE === "policy") {
+    $("settings-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      const tax = numberOrNull($("set-tax"));
+      send("/api/settings", {
+        tax_rate: tax === null ? null : tax / 100,
+        pickup_cost_usd: numberOrNull($("set-pickup")),
+        shipping_preference: $("set-shipping").value,
+      }, "Re-working every verdict…");
+    });
+  }
+}
+
+setUpNav();
+wire();
+send("/api/state", undefined, "");

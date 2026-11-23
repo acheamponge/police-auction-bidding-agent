@@ -146,6 +146,9 @@ class TestBiddingAgent(AgentTestCase):
         self.assertIsNone(result.live_outcome)
         self.assertEqual(agent.policy_state.exposure_usd, 0.0)
         self.assertIn("SIMULATED", render_result(result))
+        # Fixture mode must not claim a model looked at the lot.
+        self.assertIn("No model checked this lot", result.evaluation.reason)
+        self.assertNotIn("Muse Ember raised no objection", result.evaluation.reason)
 
     def test_proxy_maximum_is_kept_inside_what_the_policy_has_left(self):
         # $1,200 session budget: a proxy sized to the $1,500 max alone would
@@ -196,6 +199,14 @@ class TestBiddingAgent(AgentTestCase):
         self.assertEqual(result.evaluation.suggested_all_in_max, 1_200.0)
         self.assertEqual(result.policy_decision, "DENIED")
         self.assertIsNone(result.bid_request_text)
+
+    def test_live_bid_reason_says_the_model_agreed(self):
+        ledger = self.ledger()
+        client, _ = self.live_client(ledger, json.dumps(model_read(self.parsed)))
+        result = self.agent(ledger, client).evaluate_page(self.parsed, self.text, URL, 1_500.00)
+        self.assertEqual(result.evaluation.verdict, "BID")
+        self.assertIn("Muse Ember raised no objection", result.evaluation.reason)
+        self.assertNotIn("No model checked", result.evaluation.reason)
 
     def test_model_objection_stops_the_bid_end_to_end(self):
         ledger = self.ledger()

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{title}} · Police Auction Bidding Agent</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body data-page="{{page}}">
+  <div class="bg-fx" aria-hidden="true"></div>
+
+  <header class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="/">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4l6 6M10.5 7.5l6 6M12.5 8.5l-8 8a1.5 1.5 0 0 0 2 2l8-8M4 21h9"/></svg>
+        </span>
+        <span class="brand-text"><span class="brand-pre">Police Auction </span><span class="glow-text">Bidding Agent</span></span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="/" data-nav="overview">Overview</a>
+        <a href="/demo" data-nav="demo">Demo</a>
+        <a href="/lots" data-nav="lots">Lots</a>
+        <a href="/policy" data-nav="policy">Policy</a>
+        <a href="/ledger" data-nav="ledger">Ledger</a>
+        <a href="/method" data-nav="method">Method</a>
+        <a href="/cli" data-nav="cli">Command line</a>
+      </nav>
+      <div class="nav-status">
+        <span class="pill mode-pill">loading</span>
+        <a class="btn btn-primary btn-sm" href="/lots">Evaluate a lot</a>
+      </div>
+      <button id="menu-button" class="menu-button" type="button" aria-expanded="false" aria-controls="mobile-menu" aria-label="Open menu">
+        <span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span>
+      </button>
+    </div>
+    <div id="mobile-menu" class="mobile-menu" hidden>
+      <div class="mobile-status"><span class="pill mode-pill">loading</span></div>
+      <a href="/" data-nav="overview"><b>Overview</b><span>What the agent does and where it stands</span></a>
+      <a href="/demo" data-nav="demo"><b>Demo</b><span>Four real lots, start to finish</span></a>
+      <a href="/lots" data-nav="lots"><b>Lots</b><span>Evaluate and watch your own lots</span></a>
+      <a href="/policy" data-nav="policy"><b>Policy</b><span>The spending leash and your assumptions</span></a>
+      <a href="/ledger" data-nav="ledger"><b>Ledger</b><span>Every model call against the $10</span></a>
+      <a href="/method" data-nav="method"><b>Method</b><span>How every verdict is made</span></a>
+      <a href="/cli" data-nav="cli"><b>Command line</b><span>Use it without the UI</span></a>
+    </div>
+  </header>
+
+  <main class="main">
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+{{content}}
+  </main>
+
+  <footer class="footer">
+    <div class="footer-inner">
+      <span>Police Auction Bidding Agent · a local demo. Dry-run only: nothing here can place a bid.</span>
+      <span>Verdicts come from the lot's own page. Value estimates come from Muse Ember and can be wrong.</span>
+    </div>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>

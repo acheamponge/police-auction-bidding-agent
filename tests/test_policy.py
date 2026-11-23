@@ -98,6 +98,21 @@ class TestCostLedger(unittest.TestCase):
             # A fresh ledger on the same file picks the overspend back up.
             self.assertEqual(CostLedger(path, budget_usd=0.01).total_usd, 0.02)
 
+    def test_entries_returns_the_most_recent_calls_oldest_first(self):
+        import tempfile
+        from src.cost_ledger import CostLedger
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "ledger.jsonl")
+            ledger = CostLedger(path)
+            self.assertEqual(ledger.entries(), [])
+            for cost in (0.001, 0.002, 0.003):
+                self.record(ledger, cost)
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write("not json\n")           # a damaged line is skipped
+            self.record(ledger, 0.004)
+            self.assertEqual([entry["cost_usd"] for entry in ledger.entries(limit=2)], [0.003, 0.004])
+            self.assertEqual(len(ledger.entries()), 4)
+
     def test_ember_pricing_math(self):
         from src.ember_client import price_call
         # 3,000 input tokens, 600 output tokens at standard tier

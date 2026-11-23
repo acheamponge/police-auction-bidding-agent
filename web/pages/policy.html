@@ -1,0 +1,50 @@
+    <div class="page-head rise">
+      <div class="page-head-text">
+        <div class="eyebrow eyebrow-dot">Policy</div>
+        <h1 class="hero-title">The spending leash and your assumptions</h1>
+        <p class="lede">Every bid plan passes a policy gate before anything is shown as allowed, and every all-in total rests on two things a lot page cannot tell the agent: your tax rate and what a pickup costs you.</p>
+      </div>
+    </div>
+
+    <section id="policy-kpis" class="kpis rise rise-2" aria-label="Policy limits"></section>
+
+    <div class="grid-2">
+      <section class="card pad" aria-labelledby="rules-title">
+        <h2 id="rules-title" class="card-title">The gate, in order</h2>
+        <ol class="rules">
+          <li><b>A no-bid or a hold never spends.</b> Only a BID verdict reaches the gate.</li>
+          <li><b>Per-lot cap.</b> An all-in total over <span id="rule-cap" class="num"></span> is denied outright. That is PropertyRoom's card and PayPal ceiling; above it only a wire works, and the agent never wires money.</li>
+          <li><b>Session budget.</b> What is already committed plus the new all-in may not pass <span id="rule-budget" class="num"></span>.</li>
+          <li><b>Dry-run.</b> What passes is printed as the bid it would place, and stops there. This UI has no live mode.</li>
+        </ol>
+        <p class="note">A proxy bid is judged at its maximum, not at the next increment, and its maximum is sized to fit what the gate has left. <span id="rule-reserve"></span></p>
+        <p class="note">The cap, the session budget and the reserve setting come from <code>config.json</code>.</p>
+      </section>
+
+      <section class="card pad" aria-labelledby="settings-title">
+        <h2 id="settings-title" class="card-title">Your assumptions</h2>
+        <p class="note first">Changing these re-works every verdict on the Lots page without calling the model. They last until you stop the app; put them in <code>config.json</code> to keep them.</p>
+        <form id="settings-form" class="form-col">
+          <label class="field">
+            <span>Sales tax rate</span>
+            <span class="pct-input"><input id="set-tax" type="number" min="0" max="25" step="0.01" inputmode="decimal" placeholder="none"></span>
+            <small>Not printed on lot pages. With none set, every lot is held.</small>
+          </label>
+          <label class="field">
+            <span>Your cost to pick up</span>
+            <span class="money-input"><input id="set-pickup" type="number" min="0" step="0.01" inputmode="decimal" placeholder="never pick up"></span>
+            <small>Travel or towing, added to the page's pickup fee. 0 if you are local. Empty means the agent never chooses pickup.</small>
+          </label>
+          <label class="field">
+            <span>Delivery</span>
+            <select id="set-shipping">
+              <option value="cheapest">Cheapest</option>
+              <option value="standard">Standard shipping</option>
+              <option value="expedited">Expedited shipping</option>
+              <option value="pickup">Pickup</option>
+            </select>
+          </label>
+          <button class="btn btn-primary" type="submit">Apply</button>
+        </form>
+      </section>
+    </div>

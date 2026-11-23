@@ -11,6 +11,9 @@ One `evaluate_lot()` call is one full agent run for one lot:
      agent prints the exact bid it would place and stops — no money moves.
 
 `evaluate_page()` is steps 2-4 for a page that is already fetched and parsed.
+Pass it the `ember_result` of an earlier run of the same, unchanged page and
+step 2 is skipped: no model call, no cost. That is what lets the web UI
+re-work a verdict for a new max or tax rate for free.
 """
 
 from __future__ import annotations
@@ -32,6 +35,7 @@ class AgentResult:
     policy_note: str
     bid_request_text: str | None = None
     live_outcome: str | None = None
+    ember_result: dict | None = None   # Ember's read, reusable while the page is unchanged
 
 
 class BiddingAgent:
@@ -56,8 +60,10 @@ class BiddingAgent:
 
     def evaluate_page(self, parsed: dict, lot_text: str, lot_url: str,
                       all_in_max: float | None, live: bool = False,
-                      confirm: bool = False) -> AgentResult:
-        ember_result = self.ember.evaluate_lot(lot_text, lot_url)
+                      confirm: bool = False,
+                      ember_result: dict | None = None) -> AgentResult:
+        if ember_result is None:
+            ember_result = self.ember.evaluate_lot(lot_text, lot_url)
         evaluation = evaluate(
             parsed, ember_result, lot_url, all_in_max,
             tax_rate=self.tax_rate,
@@ -101,6 +107,7 @@ class BiddingAgent:
             policy_note=decision.note,
             bid_request_text=bid_text,
             live_outcome=live_outcome,
+            ember_result=ember_result,
         )
 
 

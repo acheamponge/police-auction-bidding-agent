@@ -1,0 +1,20 @@
+    <div class="page-head rise">
+      <div class="page-head-text">
+        <div class="eyebrow eyebrow-dot">Ledger</div>
+        <h1 class="hero-title">Every model call against the $10</h1>
+        <p class="lede">The budget is a wall in front of the call, not a note after it. Before each request the worst case is priced, the whole prompt plus the full output cap, and a call that could cross the budget is never sent. What a call really cost is always written down afterwards.</p>
+      </div>
+    </div>
+
+    <section id="ledger-kpis" class="kpis rise rise-2" aria-label="Budget"></section>
+
+    <section class="card pad">
+      <div class="meter-head"><span class="eyebrow">Budget used</span><span id="budget-share" class="num"></span></div>
+      <div class="meter" id="budget-meter" role="img" aria-label="Model budget used"><div id="budget-bar" class="meter-bar"></div></div>
+      <p class="note">Muse Ember is a reasoning model: its thinking is billed as output. The client asks for low reasoning effort and caps output at 4,000 tokens, so the worst case for one call stays under $0.003.</p>
+    </section>
+
+    <section class="card pad">
+      <h2 class="card-title">Recent calls</h2>
+      <div class="table-wrap"><table class="table" id="ledger-table"></table></div>
+    </section>

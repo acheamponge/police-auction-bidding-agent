@@ -86,6 +86,21 @@ class CostLedger:
             fh.write(json.dumps(entry) + "\n")
         return entry
 
+    def entries(self, limit: int = 200) -> list:
+        """The most recent recorded calls, oldest first."""
+        if not os.path.exists(self.path):
+            return []
+        found = []
+        with open(self.path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(entry, dict) and entry.get("type") == "call":
+                    found.append(entry)
+        return found[-limit:]
+
     def summary(self) -> dict:
         return {
             "budget_usd": self.budget_usd,

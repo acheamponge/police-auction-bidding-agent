@@ -1,0 +1,75 @@
+    <div class="page-head rise">
+      <div class="page-head-text">
+        <div class="eyebrow eyebrow-dot">Method</div>
+        <h1 class="hero-title">How every verdict is made</h1>
+        <p class="lede">The money numbers always come from a deterministic parse of the lot's own page. Muse Ember is the second pair of eyes. Its read can turn a bid into a hold, never the other way, so a listing that tries to talk the model into something gains nothing.</p>
+      </div>
+    </div>
+
+    <section class="card pad">
+      <h2 class="card-title">The pipeline</h2>
+      <ol class="steps">
+        <li><b>Fetch</b><span>The lot's own public PropertyRoom page. No login.</span></li>
+        <li><b>Parse</b><span>Price, increment, premium, reserve, status and the delivery table, by fixed rules.</span></li>
+        <li><b>Second read</b><span>Muse Ember reads the same page on its own: the same fields, a value estimate, and a stance on the listing.</span></li>
+        <li><b>Math</b><span>All-in = hammer + premium + tax + delivery. The max hammer is the largest whole-cent bid that stays inside your max.</span></li>
+        <li><b>Verdict</b><span>BID, NO BID, or HOLD FOR YOU.</span></li>
+        <li><b>Bid plan</b><span>The proxy maximum to set, inside every limit.</span></li>
+        <li><b>Policy gate</b><span>Per-lot cap, session budget, dry-run.</span></li>
+      </ol>
+    </section>
+
+    <div class="grid-3">
+      <section class="card pad card-accent">
+        <h3>Two reads must agree</h3>
+        <p>Ember extracts the price, premium, increment, reserve flag, status and delivery prices independently. If any differs from the parse, one of the two misread the page, and the lot is held.</p>
+      </section>
+      <section class="card pad card-accent">
+        <h3>Ember can veto</h3>
+        <p>Its stance covers what the numbers cannot see. For a vehicle: does it start and run, is there a key and a clean title, is the mileage credible. For anything else: is it for parts, is a charger or battery missing, is it a vague mixed lot. Boilerplate like "sold as-is" is not a reason on its own.</p>
+      </section>
+      <section class="card pad card-accent">
+        <h3>Ember prices the item</h3>
+        <p>It estimates what the item would fairly sell for second-hand and says what it compared it to. An all-in total above the top of that range is held. With no max from you, the low end becomes a suggestion and nothing is bid.</p>
+      </section>
+    </div>
+
+    <div class="grid-2">
+      <section class="card pad">
+        <h2 class="card-title">The bid plan</h2>
+        <p>PropertyRoom takes proxy bids: you set a maximum and it bids the lowest amount needed to lead, never more. It also extends an auction that gets a bid in its last minute, so bidding late gains nothing. The right move is one disciplined maximum, set once.</p>
+        <p>That maximum is the highest whole-dollar hammer price whose all-in total stays inside all three limits: your all-in max, the top of Ember's value estimate, and what the spending policy has left.</p>
+        <p>One exception: when the reserve is not met, PropertyRoom bids a proxy's full maximum at once. On a reserve lot you have allowed, the agent plans a plain bid at the next increment instead.</p>
+      </section>
+      <section class="card pad">
+        <h2 class="card-title">Three things the page does not tell you</h2>
+        <ul class="plain">
+          <li><b>Tax.</b> It is computed at checkout from the ship-to state. The agent treats it as your assumption and labels it. With none set, every lot is held.</li>
+          <li><b>What a pickup costs you.</b> The page prices pickup at $0 to about $24, but someone still has to travel or tow. The agent never chooses pickup unless you say what it costs you.</li>
+          <li><b>Whether the auction is running.</b> Every page carries the words "Ending" and "Ended". Only a dated "Ends" line counts as live. If the agent cannot tell, it holds.</li>
+        </ul>
+      </section>
+    </div>
+
+    <div class="grid-2">
+      <section class="card pad">
+        <h2 class="card-title">When it holds</h2>
+        <ul class="plain">
+          <li>The auction status cannot be read.</li>
+          <li>A premium is mentioned but no rate can be read.</li>
+          <li>No tax rate, or no usable delivery method.</li>
+          <li>No all-in max was given.</li>
+          <li>The reserve is not met and reserve lots are not allowed.</li>
+          <li>The two reads of the page disagree.</li>
+          <li>Ember's stance is not "bid", or the all-in is above its top value estimate.</li>
+        </ul>
+      </section>
+      <section class="card pad">
+        <h2 class="card-title">Not built yet</h2>
+        <ul class="plain">
+          <li><b>Placing a bid.</b> The agent stops at the exact bid request. That needs a registered PropertyRoom account and a person reviewing the first requests.</li>
+          <li><b>Market data.</b> The value estimate is Ember's judgment from the listing text alone. It is not checked against sold prices, and Ember cannot see the photos.</li>
+          <li><b>Opening bids.</b> The next bid is read as current price plus one increment, which is one increment high on a lot with no bids yet. A proxy bid is not affected.</li>
+        </ul>
+      </section>
+    </div>

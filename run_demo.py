@@ -22,39 +22,19 @@ exercised on real fee data.
 from __future__ import annotations
 
 import argparse
-import datetime
 import json
 import os
-import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from src.agent import BiddingAgent, render_result  # noqa: E402
+from src.agent import render_result  # noqa: E402
 from src.config import load_env  # noqa: E402
 from src.cost_ledger import CostLedger  # noqa: E402
+from src.demo import DEMO_PICKUP_COST_USD, DEMO_TAX_RATE, demo_agent, evaluate_demo_lot  # noqa: E402
 from src.demo_lots import DEMO_LOTS  # noqa: E402
 from src.ember_client import EmberClient  # noqa: E402
-from src.lot_fetcher import fetch_lot_page, html_to_text, parse_lot_text  # noqa: E402
-from src.policy import PolicyConfig  # noqa: E402
-
-# Two things a lot page cannot tell the agent, set here as explicit, labelled
-# demo assumptions. Replace both with your own before bidding for real.
-#   Tax is not printed on lot pages (Lynnwood, WA combined rate ~10%).
-#   Collecting a pickup lot costs the buyer something; the demo assumes a
-#   local buyer, so $0 on top of the pickup fee the page prints.
-DEMO_TAX_RATE = 0.10
-DEMO_PICKUP_COST_USD = 0.00
-
-_ENDED_LINE = r"\bEnded\s+[A-Za-z]{3}\s+\d{1,2},\s+\d{4}\s+at\s+[\d:]+\s+[AP]M\s*\(Eastern\)"
-
-
-def as_if_live(lot_text: str) -> str:
-    """The same page text with its "Ended <date>" line turned into an
-    "Ends <date>" line two days out. Fee data is untouched."""
-    ends = datetime.datetime.now() + datetime.timedelta(days=2)
-    return re.sub(_ENDED_LINE,
-                  ends.strftime("Ends %b %d, %Y at %I:%M %p (Eastern)"), lot_text)
+from src.lot_fetcher import fetch_lot_page, html_to_text  # noqa: E402
 
 
 def main() -> int:
@@ -78,21 +58,9 @@ def main() -> int:
         return 2
 
     ledger = CostLedger(ledger_path)
-    agent = BiddingAgent(
-        ledger=ledger,
-        tax_rate=DEMO_TAX_RATE,
-        shipping_preference="cheapest",
-        pickup_cost_usd=DEMO_PICKUP_COST_USD,
-        policy_config=PolicyConfig(
-            tx_cap_usd=4_999.99,      # PropertyRoom card/PayPal ceiling
-            session_budget_usd=2_000.00,
-            dry_run=True,             # demo never bids
-            allow_reserve_lots=False,
-            live_bidding_configured=False,
-        ),
-        # An empty key forces fixture mode unless --live-ember was asked for.
-        ember=EmberClient(ledger=ledger, api_key=None if args.live_ember else ""),
-    )
+    # An empty key forces fixture mode unless --live-ember was asked for.
+    agent = demo_agent(ledger, EmberClient(ledger=ledger,
+                                           api_key=None if args.live_ember else ""))
     mode = "LIVE Muse Ember (muse-ember-1.0)" if agent.ember.live else \
         "FIXTURE MODE — no model called, $0.00 (pass --live-ember for the real model)"
     print("=" * 72)
@@ -119,21 +87,15 @@ def main() -> int:
         print("-" * 72)
         try:
             lot_text = html_to_text(fetch_lot_page(lot["url"]))
-            listed = agent.evaluate_page(parse_lot_text(lot_text), lot_text,
-                                         lot["url"], lot["all_in_max"])
+            listed, live = evaluate_demo_lot(agent, lot, lot_text)
             print(render_result(listed))
-            if listed.evaluation.status != "ended":
-                continue
-
-            # As-if-live pass: same real fee data, the ended line rewritten,
-            # so the BID path is exercised end-to-end.
-            print()
-            print(">>> AS-IF-LIVE: same lot, evaluated as if the auction were "
-                  "still running (fee data is real; only the end line is changed).")
-            live_text = as_if_live(lot_text)
-            print(render_result(agent.evaluate_page(
-                parse_lot_text(live_text), live_text,
-                lot["url"], lot["all_in_max"])))
+            if live is not None:
+                # As-if-live pass: same real fee data, the ended line
+                # rewritten, so the BID path is exercised end-to-end.
+                print()
+                print(">>> AS-IF-LIVE: same lot, evaluated as if the auction were "
+                      "still running (fee data is real; only the end line is changed).")
+                print(render_result(live))
         except Exception as exc:  # noqa: BLE001 — demo should show the failure
             print(f"FAILED to evaluate: {exc}")
 

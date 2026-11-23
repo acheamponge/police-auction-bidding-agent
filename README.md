@@ -167,10 +167,11 @@ output cap) and refuses to send anything that could push spend over $10.
 After the call, what it really cost is always written to
 `cost_ledger.jsonl` with tokens and the running total.
 
-Ledger after the runs below: 40 calls, 34 of them live, **$0.0251 spent,
-$9.97 left**. That total includes four early calls that came back empty
-because of the 1,200-token cap, and four tiny calls that checked which
-settings the API accepts.
+Ledger after the command-line runs below: 40 calls, 34 of them live,
+**$0.0251 spent, $9.97 left**. That total includes four early calls that
+came back empty because of the 1,200-token cap, and four tiny calls that
+checked which settings the API accepts. The UI's Ledger page shows the
+running total, including runs made from the UI since.
 
 ## Demo results
 
@@ -218,7 +219,38 @@ unknown.
 
 No bids were placed. No money moved.
 
-## Run it
+## The demo UI
+
+```bash
+python3 app.py          # then open http://127.0.0.1:8765
+```
+
+A small dark, multi-page web app over the same agent, for showing it to
+people. Python's own web server and one stylesheet and script; nothing to
+install.
+
+| Page | What it shows |
+|---|---|
+| Overview | What the agent does, the three traps, and where things stand |
+| Demo | The four demo lots run start to finish, as listed next to as-if-live |
+| Lots | Paste a lot link and an all-in max; read the verdict, the bid plan and Ember's reasoning |
+| Policy | The spending gate in order, and your tax, pickup and delivery assumptions |
+| Ledger | Every model call with its tokens and cost, against the $10 |
+| Method | How a verdict is made, when the agent holds, and what is not built |
+| Command line | The section below, so the no-UI usage travels with the demo |
+
+It is a local demo, not a public site. It listens on `127.0.0.1` only,
+accepts changes only from its own pages, will only fetch PropertyRoom lot
+pages, and is dry-run only: nothing in it can place a bid. Your API key stays
+in the server process; the pages are only told whether a live model is in use.
+
+With a key in `.env` it uses live Muse Ember, at about $0.0008 for each new
+lot or lot whose price or fees changed. Changing your max or your
+assumptions, or re-running the demo, re-works verdicts without another call.
+`python3 app.py --fixture` never calls the model. Your lots are kept in
+`watchlist.json`, the same file `watch.py` reads.
+
+## Run it from the command line
 
 ```bash
 # Demo: four real lots, end to end, evaluation only (fixture mode, $0)
@@ -237,7 +269,7 @@ python3 evaluate.py --lot https://www.propertyroom.com/l/.../12345678 --tax-rate
 # Watch lots until they end (copy watchlist.example.json to watchlist.json)
 python3 watch.py --watchlist watchlist.json --interval 300
 
-# Tests (99, no network, no API key)
+# Tests (131, no network, no API key)
 python3 -m unittest discover -s tests
 ```
 
@@ -247,8 +279,8 @@ Python 3.10+, standard library only — no `pip install` needed.
 
 Copy `config.example.json` to `config.json` to set your tax rate, pickup
 cost, shipping preference, default all-in max and policy limits once.
-`evaluate.py` and `watch.py` read it, and any flag on the command line wins
-over it. `config.json` and `watchlist.json` are git-ignored.
+`evaluate.py`, `watch.py` and `app.py` read it, and any flag on the command
+line wins over it. `config.json` and `watchlist.json` are git-ignored.
 
 ### Live Muse Ember
 
@@ -256,9 +288,9 @@ Copy `.env.example` to `.env` and put your key in `MODEL_API_KEY`. The
 scripts read `.env` on their own; a variable already set in your shell wins
 over the file. `.env` is git-ignored.
 
-`evaluate.py` and `watch.py` use the real model whenever a key is present.
-`run_demo.py` only does when you pass `--live-ember`, so the plain demo
-never spends.
+`evaluate.py`, `watch.py` and `app.py` use the real model whenever a key is
+present. `run_demo.py` only does when you pass `--live-ember`, so the plain
+demo never spends.
 
 **Without a key the agent runs in fixture mode** (the SimCity pattern): a
 deterministic local evaluator returns the same JSON schema Ember would,
@@ -292,6 +324,7 @@ itself, so it always agrees and gives no value estimate.
 | `run_demo.py` | Demo: 4 real lots, as-listed + as-if-live, ledger summary |
 | `evaluate.py` | CLI: evaluate one lot (`--lot URL [--max N] [--tax-rate R] [--pickup-cost C]`) |
 | `watch.py` | CLI: watch lots until they end (`--watchlist FILE` or `--lot URL --max N`) |
+| `app.py` | The demo UI's server (`--port N`, `--fixture`) |
 | `src/agent.py` | Orchestration: fetch -> Ember -> math -> policy gate |
 | `src/ember_client.py` | Muse Ember client (OpenAI-compatible), pricing, pre-call budget check, fixture mode |
 | `src/cost_ledger.py` | JSONL ledger of every model call + $10 budget wall |
@@ -300,9 +333,12 @@ itself, so it always agrees and gives no value estimate.
 | `src/policy.py` | Spending policy gate (SimCity pattern, adapted) |
 | `src/live_bid.py` | Gated live-bid path — refuses without config + confirm |
 | `src/watcher.py` | The watch loop: re-evaluates a lot only when it changed |
+| `src/demo.py` | The demo run and its assumptions, shared by `run_demo.py` and the UI |
+| `src/web.py` / `src/mini_markdown.py` | The UI's routes and JSON API; renders this README's command-line section into the UI |
+| `web/` | The UI: one shell, a fragment per page, one stylesheet, one script |
 | `src/config.py` / `src/cli.py` | Loads `.env` and `config.json`; flags shared by the scripts |
 | `src/demo_lots.py` | The four demo lots |
-| `tests/` + `tests/fixtures/` | 99 unit tests; fixtures mirror the layout of real lot pages |
+| `tests/` + `tests/fixtures/` | 131 unit tests; fixtures mirror the layout of real lot pages |
 | `config.example.json` / `watchlist.example.json` / `.env.example` | Templates (copy, never commit secrets) |
 | `cost_ledger.jsonl` | Ledger from the demo runs |
 

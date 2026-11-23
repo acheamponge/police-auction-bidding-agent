@@ -290,6 +290,7 @@ def evaluate(parsed: dict, ember_result: dict, lot_url: str, all_in_max: float |
     value_low, value_high = _number(value.get("low")), _number(value.get("high"))
     value_basis = value.get("basis") if isinstance(value.get("basis"), str) else None
     mismatches = disagreements(parsed, ember_result)
+    simulated = bool((ember_result.get("_meta") or {}).get("simulated"))
     suggested_max = value_low if all_in_max is None else None
     budget = all_in_max if all_in_max is not None else suggested_max
 
@@ -414,8 +415,12 @@ def evaluate(parsed: dict, ember_result: dict, lot_url: str, all_in_max: float |
                            f"Math clears: next bid ${next_bid:,.2f} lands "
                            f"all-in at ${all_in_next:,.2f}, inside the "
                            f"${all_in_max:,.2f} max (max hammer bid "
-                           f"${max_hammer:,.2f}). Both reads of the page agree "
-                           "and Muse Ember raised no objection.")
+                           f"${max_hammer:,.2f}). "
+                           + ("No model checked this lot (fixture mode): there "
+                              "was no second read and there is no value estimate."
+                              if simulated else
+                              "Both reads of the page agree and Muse Ember "
+                              "raised no objection."))
         limits = [("your all-in max", all_in_max)]
         if value_high is not None:
             limits.append(("Muse Ember's top value estimate", value_high))
@@ -446,7 +451,7 @@ def evaluate(parsed: dict, ember_result: dict, lot_url: str, all_in_max: float |
         risk_flags=risks,
         ember_stance=stance,
         ember_reasoning=reasoning,
-        simulated=bool((ember_result.get("_meta") or {}).get("simulated")),
+        simulated=simulated,
         pickup_cost_usd=pickup_cost_usd if used_pickup else None,
         value_estimate_low=value_low,
         value_estimate_high=value_high,
