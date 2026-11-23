@@ -1,4 +1,6 @@
-# PropertyRoom Bidding Agent — built on Muse Ember
+# Police Auction Bidding Agent — built on Muse Ember
+
+**Built entirely with Muse on iPhone** — designed, coded, tested, and demoed from the Muse iPhone app.
 
 An agent that bids on PropertyRoom police auctions without ever bidding
 blind. It evaluates a lot, reads the buyer's premium, tax, and shipping
