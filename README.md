@@ -15,8 +15,13 @@ Solo, virtual, US-only. $5,000 in prizes.
 
 ## The idea
 
-PropertyRoom sells seized and surplus goods as-is, and its fees are a trap
-for anyone who bids on the hammer price alone:
+![A PropertyRoom lot page for a 2019 Chevrolet Cruze, scrolling from the photo, current price and 12% buyer's premium down through the description, vehicle details, known defects and pickup rules](web/propertyroom.gif)
+
+*A live lot page on PropertyRoom.com, recorded Nov 23, 2026. This page is all the agent reads. The line naming the high bidder is blurred.*
+
+PropertyRoom.com auctions seized, found and surplus goods on behalf of police
+departments and other public agencies. It sells them as-is, and its fees are
+a trap for anyone who bids on the hammer price alone:
 
 - **The buyer's premium varies per lot.** PropertyRoom's help says it is
   "not a charge that is on most items", and that a lot with a 10%, 12% or
@@ -282,7 +287,7 @@ python3 evaluate.py --lot https://www.propertyroom.com/l/.../12345678 --tax-rate
 # Watch lots until they end (copy watchlist.example.json to watchlist.json)
 python3 watch.py --watchlist watchlist.json --interval 300
 
-# Tests (149, no network, no API key)
+# Tests (150, no network, no API key)
 python3 -m unittest discover -s tests
 ```
 
@@ -348,10 +353,10 @@ itself, so it always agrees and gives no value estimate.
 | `src/watcher.py` | The watch loop: re-evaluates a lot only when it changed |
 | `src/demo.py` | The demo run and its assumptions, finding a live auction, and what the command line prints; shared by `run_demo.py` and the UI |
 | `src/web.py` / `src/mini_markdown.py` | The UI's routes and JSON API; renders this README's command-line section into the UI |
-| `web/` | The UI: one shell, a fragment per page, one stylesheet, one script |
+| `web/` | The UI: one shell, a fragment per page, one stylesheet, one script, and the recording of a PropertyRoom lot page shown above |
 | `src/config.py` / `src/cli.py` | Loads `.env` and `config.json`; flags shared by the scripts |
 | `src/demo_lots.py` | The four demo lots |
-| `tests/` + `tests/fixtures/` | 149 unit tests; fixtures mirror the layout of real lot pages |
+| `tests/` + `tests/fixtures/` | 150 unit tests; fixtures mirror the layout of real lot pages |
 | `config.example.json` / `watchlist.example.json` / `.env.example` | Templates (copy, never commit secrets) |
 | `cost_ledger.jsonl` | Ledger from the demo runs |
 

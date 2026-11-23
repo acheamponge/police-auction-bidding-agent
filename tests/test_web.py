@@ -497,6 +497,17 @@ class TestDispatch(WebTestCase):
         self.assertEqual(self.request(app, "GET", "/app.js")[:2], (200, "text/javascript; charset=utf-8"))
         self.assertEqual(self.request(app, "GET", "/style.css")[:2], (200, "text/css; charset=utf-8"))
 
+    def test_recording_of_the_real_site_is_served_and_shown_on_the_overview(self):
+        app = self.app(live=False)
+        status, content_type, payload = self.request(app, "GET", "/propertyroom.gif")
+        self.assertEqual((status, content_type), (200, "image/gif"))
+        self.assertEqual(payload[:6], b"GIF89a")
+        self.assertLess(len(payload), 4_000_000)       # small enough to sit in a README
+        overview = self.request(app, "GET", "/")[2].decode("utf-8")
+        self.assertIn('<img src="/propertyroom.gif"', overview)
+        self.assertIn(' alt="A PropertyRoom lot page', overview)
+        self.assertIn("recorded Nov 23, 2026", overview)
+
     def test_command_line_page_shows_the_readme_usage(self):
         app = self.app(live=False)
         page = self.request(app, "GET", "/cli")[2].decode("utf-8")

@@ -68,6 +68,8 @@ PAGES = {
 ASSETS = {
     "/style.css": ("style.css", "text/css; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+    # A recording of a real PropertyRoom lot page, so people can see the site.
+    "/propertyroom.gif": ("propertyroom.gif", "image/gif"),
 }
 # The README sections shown on the Command line page.
 README_SECTIONS = ("Run it from the command line", "Files")

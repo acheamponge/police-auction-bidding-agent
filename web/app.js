@@ -295,7 +295,12 @@ function listingView(lot) {
         el("tbody", {}, delivery))) : null,
       el("p", { class: "fine" },
         "Read off the listing at " + new Date(lot.fetched_at).toLocaleTimeString() +
-        ". PropertyRoom does not let its pages be shown inside other sites, so this is the listing's own text. Tax is not on the page.")));
+        ". PropertyRoom does not let its pages be shown inside other sites, so this is the listing's own text. Tax is not on the page."),
+      el("details", { class: "site-peek" },
+        el("summary", {}, "What a lot page looks like on the site"),
+        el("img", { src: "/propertyroom.gif", width: "680", height: "478", loading: "lazy",
+          alt: "A PropertyRoom lot page scrolling from the photo, price and buyer's premium down through the description, vehicle details and pickup rules." }),
+        el("p", { class: "fine" }, "A recording of one live lot page (a 2019 Chevrolet Cruze) from Nov 23, 2026, not this lot. The high bidder's line is blurred."))));
 }
 
 function terminalView(lot) {
