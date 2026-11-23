@@ -3,7 +3,8 @@
 `python3 app.py` serves a small multi-page site on http://127.0.0.1:8765:
 
     /          Overview      what the agent does and where it stands
-    /demo      Demo          the four demo lots, start to finish
+    /demo      Demo          a live auction and the four demo lots: the listing,
+                             the command-line run and the UI run, side by side
     /lots      Lots          evaluate and watch your own lots
     /policy    Policy        the spending leash and your assumptions
     /ledger    Ledger        every model call against the $10
@@ -45,10 +46,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from . import mini_markdown
 from .agent import AgentResult, BiddingAgent
 from .cost_ledger import BudgetExceeded
-from .demo import DEMO_PICKUP_COST_USD, DEMO_TAX_RATE, demo_agent, evaluate_demo_lot
+from .demo import (DEMO_PICKUP_COST_USD, DEMO_TAX_RATE, cli_command, demo_agent,
+                   evaluate_demo_lot, find_live_lot, transcript_footer, transcript_header,
+                   transcript_lot)
 from .demo_lots import DEMO_LOTS
 from .ember_client import EmberError
-from .lot_fetcher import FetchError, fetch_and_parse
+from .lot_fetcher import FetchError, fetch_and_parse, fetch_lot_page
 from .watcher import snapshot
 
 LOT_HOSTS = ("www.propertyroom.com", "propertyroom.com")
@@ -121,6 +124,19 @@ def _result_view(result: AgentResult | None) -> dict | None:
             "policy_note": result.policy_note}
 
 
+# What the Demo page shows of a listing: the lot page's own words, as read
+# when the demo ran.
+LISTING_FIELDS = ("title", "status", "ends_text", "current_price", "bid_increment",
+                  "premium_pct", "premium_absent", "reserve_not_met", "condition",
+                  "shipping_options")
+
+
+def _demo_entry(lot: dict, live_now: bool = False) -> dict:
+    return {"lot": lot, "live_now": live_now, "snapshot": None, "reads": {}, "listed": None,
+            "as_if_live": None, "error": None, "listing": None, "fetched_at": None,
+            "cli_output": None}
+
+
 def render_page(static_dir: str, name: str, title: str) -> bytes:
     """One page: the shared shell around its fragment."""
     with open(os.path.join(static_dir, "shell.html"), encoding="utf-8") as fh:
@@ -143,10 +159,12 @@ class WebApp:
     """The UI's state and what it can do, independent of HTTP."""
 
     def __init__(self, agent: BiddingAgent, watchlist_path: str,
-                 fetch=fetch_and_parse, now=datetime.datetime.now):
+                 fetch=fetch_and_parse, now=datetime.datetime.now,
+                 fetch_html=fetch_lot_page):
         self.agent = agent
         self.watchlist_path = watchlist_path
-        self.fetch = fetch
+        self.fetch = fetch            # a lot page -> (parsed, text)
+        self.fetch_html = fetch_html  # any PropertyRoom page -> HTML
         self.now = now
         self.lock = threading.Lock()
         self.lots = []
@@ -158,8 +176,8 @@ class WebApp:
         # The demo has its own fixed assumptions, and shares the ledger and
         # the model client.
         self.demo_agent = demo_agent(agent.ledger, agent.ember)
-        self.demo = [{"lot": lot, "snapshot": None, "reads": {}, "listed": None,
-                      "as_if_live": None, "error": None} for lot in DEMO_LOTS]
+        self.demo = [_demo_entry(lot) for lot in DEMO_LOTS]
+        self.demo_live = None         # an auction found running when the demo ran
         self.demo_ran_at = None
 
     # -- state ------------------------------------------------------------
@@ -210,9 +228,13 @@ class WebApp:
                 "ran_at": self.demo_ran_at,
                 "lots": [{"label": entry["lot"]["label"], "url": entry["lot"]["url"],
                           "all_in_max": entry["lot"]["all_in_max"], "error": entry["error"],
+                          "live_now": entry["live_now"],
+                          "listing": entry["listing"], "fetched_at": entry["fetched_at"],
+                          "cli": {"command": cli_command(entry["lot"], self.agent.ember.live),
+                                  "output": entry["cli_output"]},
                           "listed": _result_view(entry["listed"]),
                           "as_if_live": _result_view(entry["as_if_live"])}
-                         for entry in self.demo],
+                         for entry in self._demo_entries()],
             },
         }
 
@@ -292,21 +314,45 @@ class WebApp:
             if lot["page"] is not None:
                 self._evaluate(lot, refetch=False)
 
+    def _demo_entries(self) -> list:
+        return ([self.demo_live] if self.demo_live else []) + self.demo
+
     def run_demo(self) -> None:
-        """Evaluate the demo lots, as listed and (once ended) as-if-live."""
-        for entry in self.demo:
+        """Run the demo: an auction that is live right now, then the fixed
+        demo lots, each as listed and (once ended) as-if-live. For each lot
+        this keeps what its page says, what the command line would print,
+        and the verdict the pages show."""
+        # Keep the same live auction between runs until it ends.
+        still_live = (self.demo_live is not None and self.demo_live["listed"] is not None
+                      and self.demo_live["listed"].evaluation.status == "live")
+        if not still_live:
+            found = find_live_lot(self.fetch_html, self.fetch,
+                                  skip=tuple(lot["url"] for lot in DEMO_LOTS))
+            self.demo_live = _demo_entry(found, live_now=True) if found else None
+
+        live_model = self.agent.ember.live
+        for entry in self._demo_entries():
+            lot = entry["lot"]
             entry["error"] = None
             try:
-                parsed, lot_text = self.fetch(entry["lot"]["url"])
+                parsed, lot_text = self.fetch(lot["url"])
                 if snapshot(parsed) != entry["snapshot"]:
                     entry["reads"] = {}
-                listed, live = evaluate_demo_lot(self.demo_agent, entry["lot"], lot_text,
+                listed, live = evaluate_demo_lot(self.demo_agent, lot, lot_text,
                                                  entry["reads"], self.now())
                 entry.update(snapshot=snapshot(parsed), listed=listed, as_if_live=live,
+                             listing={field: parsed.get(field) for field in LISTING_FIELDS},
+                             fetched_at=self.now().isoformat(timespec="seconds"),
                              reads={"listed": listed.ember_result,
                                     "as_if_live": live.ember_result if live else None})
             except (FetchError, EmberError, BudgetExceeded) as exc:
                 entry.update(error=str(exc), listed=None, as_if_live=None)
+            # Exactly what the command shown beside it prints for this run.
+            entry["cli_output"] = "\n".join(
+                transcript_header(live_model, self.agent.ember.model)
+                + transcript_lot(lot["url"], lot["all_in_max"], entry["listed"],
+                                 entry["as_if_live"], entry["error"])
+                + transcript_footer(self.agent.ledger.summary(), "cost_ledger.jsonl"))
         self.demo_ran_at = self.now().isoformat(timespec="seconds")
 
     # -- HTTP -----------------------------------------------------------------

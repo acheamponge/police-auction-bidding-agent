@@ -246,51 +246,144 @@ function renderOverview(state) {
 }
 
 // ---- Demo -------------------------------------------------------------------
+// One lot at a time, three views of the same run: the listing on the site,
+// the command line, and this UI.
+
+let demoSelected = 0;
+let lastState = null;
+
+function stepTitle(number, text) {
+  return el("h2", { class: "step-title" }, el("span", { class: "step-number" }, number), text);
+}
+
+function listingView(lot) {
+  const listing = lot.listing;
+  const open = el("a", { class: "btn btn-sm", href: lot.url, target: "_blank", rel: "noopener noreferrer" },
+    "Open the live page ↗");
+  const bar = el("div", { class: "browser-bar" },
+    el("span", { class: "dots", "aria-hidden": "true" }, el("i", {}), el("i", {}), el("i", {})),
+    el("span", { class: "address" }, lot.url.replace("https://", "")),
+    open);
+  if (!listing) {
+    return el("div", { class: "card browser" }, bar,
+      el("div", { class: "browser-body" },
+        el("p", { class: "muted" }, lot.error ? "This listing could not be read: " + lot.error
+          : "Run the demo to read this listing off PropertyRoom. The button above opens the real page.")));
+  }
+  const live = listing.status === "live";
+  const delivery = (listing.shipping_options || []).map((option) => el("tr", {},
+    el("td", {}, option.method),
+    el("td", { class: "r" }, option.available ? money(option.price_usd) : "Not available")));
+  return el("div", { class: "card browser" }, bar,
+    el("div", { class: "browser-body" },
+      el("div", { class: "listing-head" },
+        el("h3", {}, listing.title || lot.label),
+        el("span", { class: "pill " + (live ? "pill-go pill-live" : "pill-prop") },
+          live ? "live auction" : listing.status === "ended" ? "ended" : "status unclear")),
+      el("p", { class: "listing-ends" }, listing.ends_text || "The page prints no dated Ends or Ended line."),
+      listing.reserve_not_met && el("p", { class: "listing-reserve" },
+        "Reserve Not Met. Bids on this item are subject to seller approval."),
+      el("dl", { class: "facts" },
+        fact("Current price", money(listing.current_price)),
+        fact("Bid increment", money(listing.bid_increment)),
+        fact("Buyer's premium", listing.premium_pct !== null ? listing.premium_pct.toFixed(2) + "%"
+          : listing.premium_absent ? "Not listed" : "Unreadable",
+          listing.premium_pct !== null ? "printed in the auction table" : listing.premium_absent ? "the page never mentions one" : null),
+        fact("Condition", listing.condition || "Not stated")),
+      delivery.length ? el("div", { class: "table-wrap" }, el("table", { class: "table listing-table" },
+        el("thead", {}, el("tr", {}, el("th", {}, "Delivery method"), el("th", { class: "r" }, "Price"))),
+        el("tbody", {}, delivery))) : null,
+      el("p", { class: "fine" },
+        "Read off the listing at " + new Date(lot.fetched_at).toLocaleTimeString() +
+        ". PropertyRoom does not let its pages be shown inside other sites, so this is the listing's own text. Tax is not on the page.")));
+}
+
+function terminalView(lot) {
+  const command = lot.cli.command;
+  const copy = el("button", { class: "btn btn-sm", type: "button",
+    onclick: async () => {
+      try {
+        await navigator.clipboard.writeText(command);
+        setStatus("Command copied. Paste it into a terminal in the project folder.");
+      } catch (error) {
+        setStatus("Could not copy. Select the command and copy it by hand.", true);
+      }
+    } }, "Copy command");
+  return el("div", { class: "card terminal" },
+    el("div", { class: "browser-bar" },
+      el("span", { class: "dots", "aria-hidden": "true" }, el("i", {}), el("i", {}), el("i", {})),
+      el("span", { class: "address" }, "Terminal · police-auction-bidding-agent"),
+      copy),
+    el("pre", { class: "terminal-body", tabindex: "0" },
+      el("span", { class: "prompt" }, "$ "), el("span", { class: "command" }, command), "\n",
+      lot.cli.output ? "\n" + lot.cli.output
+        : el("span", { class: "muted" }, "\nRun the demo to see what this prints.")));
+}
+
+function uiView(lot) {
+  if (lot.error) return el("div", { class: "card pad" }, el("p", { class: "error-box" }, lot.error));
+  if (!lot.listed) return el("div", { class: "card pad" }, el("p", { class: "muted" }, "Not run yet."));
+  const final = lot.as_if_live || lot.listed;
+  const runs = [el("div", { class: "run" + (lot.as_if_live ? "" : " single") },
+    el("div", { class: "run-head" },
+      el("span", { class: "eyebrow" }, "As listed · " + statusWord(lot.listed.evaluation)), verdictPill(lot.listed)),
+    resultBody(lot.listed))];
+  if (lot.as_if_live) {
+    runs.push(el("div", { class: "run" },
+      el("div", { class: "run-head" }, el("span", { class: "eyebrow" }, "As if live"), verdictPill(lot.as_if_live)),
+      resultBody(lot.as_if_live)));
+  }
+  return el("article", { class: "card card-accent lot " + outcome(final).card },
+    el("div", { class: "lot-head" },
+      el("div", { class: "lot-title" },
+        el("h3", {}, lot.label),
+        el("p", { class: "lot-sub" }, "All-in max " + (lot.all_in_max === null ? "not given" : money(lot.all_in_max)) +
+          (lot.live_now ? " · set a quarter above the next bid's all-in for the demo" : ""))),
+      verdictPill(final)),
+    el("div", { class: "runs" }, runs));
+}
 
 function renderDemo(state) {
+  lastState = state;
   const demo = state.demo;
   const live = state.mode === "live";
   $("demo-note").textContent =
     "Demo assumptions: " + (demo.tax_rate * 100).toFixed(0) + "% tax and " + money(demo.pickup_cost_usd) +
     " pickup cost on top of the page's fee (a local buyer). " +
-    (live ? "On the live model a first run makes up to eight calls, well under one cent in total. Running it again costs nothing unless a page changed."
+    (live ? "On the live model a first run makes up to nine calls, about one cent in total. Running it again costs nothing unless a page changed."
       : "Fixture mode: no model is called, so there is no second read and no value estimate. Start the app with a key to see Muse Ember's part.");
   $("demo-run").textContent = demo.ran_at ? "Run it again" : "Run the demo";
 
   const finals = demo.lots.map((lot) => lot.as_if_live || lot.listed).filter(Boolean);
   const counts = { bid: 0, hold: 0, nobid: 0, none: 0 };
   for (const view of finals) counts[outcome(view).key] += 1;
+  const liveLot = demo.lots.find((lot) => lot.live_now);
   $("demo-kpis").replaceChildren(...(demo.ran_at ? [
-    kpi("Lots run", String(finals.length), "of " + demo.lots.length + ", at " + new Date(demo.ran_at).toLocaleTimeString()),
+    kpi("Live right now", liveLot ? "1 auction" : "none found",
+      liveLot ? "picked off PropertyRoom at " + new Date(demo.ran_at).toLocaleTimeString() : "the vehicles listing had no live lot",
+      liveLot ? "good" : "warn"),
+    kpi("Lots run", String(finals.length), "of " + demo.lots.length),
     kpi("Bid plans", String(counts.bid), "math clears and nothing objects", counts.bid ? "good" : undefined),
     kpi("Held for you", String(counts.hold), "a person decides", counts.hold ? "warn" : undefined),
     kpi("No bid", String(counts.nobid), "ended, or over the max"),
   ] : []));
 
-  $("demo-lots").replaceChildren(...demo.lots.map((lot) => {
+  demoSelected = Math.min(demoSelected, demo.lots.length - 1);
+  $("demo-tabs").replaceChildren(...demo.lots.map((lot, index) => {
     const final = lot.as_if_live || lot.listed;
-    const o = outcome(final);
-    const runs = [];
-    if (lot.listed) {
-      runs.push(el("div", { class: "run" + (lot.as_if_live ? "" : " single") },
-        el("div", { class: "run-head" }, el("span", { class: "eyebrow" }, "As listed · " + statusWord(lot.listed.evaluation)), verdictPill(lot.listed)),
-        resultBody(lot.listed)));
-    }
-    if (lot.as_if_live) {
-      runs.push(el("div", { class: "run" },
-        el("div", { class: "run-head" }, el("span", { class: "eyebrow" }, "As if live"), verdictPill(lot.as_if_live)),
-        resultBody(lot.as_if_live)));
-    }
-    return el("article", { class: "card card-accent lot " + (lot.error ? "card-crit" : o.card) },
-      el("div", { class: "lot-head" },
-        el("div", { class: "lot-title" },
-          el("h3", {}, lotLink(lot.url, lot.label)),
-          el("p", { class: "lot-sub" }, "All-in max " + money(lot.all_in_max))),
-        lot.error ? el("span", { class: "pill verdict pill-nogo" }, "ERROR") : verdictPill(final)),
-      lot.error && el("p", { class: "error-box" }, lot.error),
-      !lot.error && !lot.listed && el("p", { class: "reason muted" }, "Not run yet."),
-      runs.length ? el("div", { class: "runs" }, runs) : null);
+    return el("button", { class: "tab", type: "button", role: "tab",
+        "aria-selected": String(index === demoSelected),
+        onclick: () => { demoSelected = index; renderDemo(lastState); } },
+      el("span", { class: "tab-kind" }, lot.live_now ? "Live now" : "Ended lot"),
+      el("span", { class: "tab-name" }, lot.label.split(" — ")[0]),
+      lot.error ? el("span", { class: "pill verdict pill-nogo" }, "ERROR") : verdictPill(final));
   }));
+
+  const lot = demo.lots[demoSelected];
+  $("demo-views").replaceChildren(
+    stepTitle("01", "The listing on PropertyRoom"), listingView(lot),
+    stepTitle("02", "The same lot on the command line"), terminalView(lot),
+    stepTitle("03", "The same lot in this UI"), uiView(lot));
 }
 
 // ---- Lots -------------------------------------------------------------------

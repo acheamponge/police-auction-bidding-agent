@@ -239,6 +239,37 @@ details > summary { cursor: pointer; margin-top: 12px; font-size: 12px; color: v
 .run-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .run.single { grid-column: 1 / -1; }
 
+/* demo: lot tabs, then the listing, the terminal and the UI for the chosen lot */
+.tabs { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+.tabs:empty { display: none; }
+.tab { flex: 1 0 190px; max-width: 300px; text-align: left; display: flex; flex-direction: column; align-items: flex-start; gap: 5px; padding: 12px 14px; border-radius: 12px; cursor: pointer;
+  border: 1px solid rgba(255,255,255,.06); background: linear-gradient(180deg, rgba(27, 37, 52, .6), rgba(18, 26, 37, .7)); transition: border-color .15s ease, background .15s ease; }
+.tab:hover { border-color: var(--accent-dim); }
+.tab[aria-selected="true"] { border-color: rgba(63, 216, 198, .6); background: linear-gradient(180deg, rgba(63, 216, 198, .14), rgba(18, 26, 37, .8)); box-shadow: 0 0 0 1px rgba(63,216,198,.15); }
+.tab-kind { font: 600 10px/1.4 var(--display); letter-spacing: .14em; text-transform: uppercase; color: var(--slate-3); }
+.tab[aria-selected="true"] .tab-kind { color: var(--teal); }
+.tab-name { font-family: var(--display); font-weight: 600; font-size: 14px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.step-title { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 600; margin-top: 8px; }
+.step-number { font: 500 12px/1 var(--mono); color: #06211e; background: linear-gradient(135deg, #5fe0cf, #27b5a5); padding: 4px 7px; border-radius: 6px; }
+.browser, .terminal { overflow: hidden; }
+.browser-bar { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); background: rgba(8, 12, 18, .55); }
+.dots { display: inline-flex; gap: 6px; flex-shrink: 0; }
+.dots i { width: 10px; height: 10px; border-radius: 50%; background: #2e3c50; }
+.dots i:first-child { background: #ff5f6e; } .dots i:nth-child(2) { background: #f0b443; } .dots i:nth-child(3) { background: #5fd483; }
+.address { flex: 1; min-width: 0; font: 400 12px/1.4 var(--mono); color: var(--slate-2); background: rgba(255,255,255,.05); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.browser-body { padding: 20px; }
+.listing-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.listing-head h3 { font-size: 19px; overflow-wrap: anywhere; }
+.listing-ends { font-family: var(--mono); font-size: 13px; color: var(--slate-2); margin-top: 6px; }
+.listing-reserve { margin-top: 10px; padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(240, 180, 67, .4); background: rgba(240, 180, 67, .08); color: #f3c66b; font-size: 13px; }
+.listing-table { margin-top: 16px; max-width: 520px; }
+.fine { font-size: 11.5px; color: var(--slate-3); margin-top: 14px; }
+.terminal { background: #05080c; }
+.terminal-body { margin: 0; padding: 16px 18px; max-height: 460px; overflow: auto; font: 400 12.5px/1.6 var(--mono); color: #cfe9e5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.terminal-body:focus-visible { outline-offset: -2px; }
+.prompt { color: var(--good); }
+.command { color: #ffffff; }
+
 /* budget meter and tables */
 .meter-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
 .meter { height: 8px; background: rgba(255,255,255,.08); border-radius: 999px; overflow: hidden; margin-top: 10px; }
@@ -296,6 +327,10 @@ details > summary { cursor: pointer; margin-top: 12px; font-size: 12px; color: v
   .tools-right { width: 100%; }
   .inline-field { flex: 1 1 auto; }
   .inline-field select { flex: 1 1 auto; min-width: 0; }
+  .tab { flex-basis: 170px; }
+  .browser-bar { flex-wrap: wrap; }
+  .browser-bar .address { order: 3; flex-basis: 100%; }
+  .browser-body { padding: 16px; }
   .table { font-size: 12px; }
   .table th, .table td { padding: 7px 8px; }
 }

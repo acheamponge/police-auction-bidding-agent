@@ -43,6 +43,18 @@ class WebTestCase(unittest.TestCase):
             self.pages[demo_lot["url"]] = ENDED
         self.fetches = []
         self.model_calls = []
+        self.listing_html = "<html>no lots listed</html>"   # PropertyRoom's vehicles listing
+        self.html_fetches = []
+
+    def fetch_html(self, url):
+        self.html_fetches.append(url)
+        if isinstance(self.listing_html, Exception):
+            raise self.listing_html
+        return self.listing_html
+
+    def list_lots(self, *urls):
+        self.listing_html = "".join(
+            f'<a href="{url.replace("https://www.propertyroom.com", "")}">lot</a>' for url in urls)
 
     def fetch(self, url):
         self.fetches.append(url)
@@ -66,7 +78,7 @@ class WebTestCase(unittest.TestCase):
                             transport=self.transport)
         agent = BiddingAgent(ledger=ledger, ember=ember,
                              **{"tax_rate": 0.10, "pickup_cost_usd": 0.0, **agent_kwargs})
-        return WebApp(agent, self.watchlist, fetch=self.fetch,
+        return WebApp(agent, self.watchlist, fetch=self.fetch, fetch_html=self.fetch_html,
                       now=lambda: datetime.datetime(2026, 11, 23, 12, 0, 0))
 
     def saved(self):
@@ -308,6 +320,120 @@ class TestDemoAndLedger(WebTestCase):
         self.assertEqual((entry["input_tokens"], entry["output_tokens"]), (4000, 500))
         self.assertEqual(state["policy"]["headroom_usd"], 2000.0)
         self.assertEqual(state["policy"]["exposure_usd"], 0.0)
+
+
+class TestDemoThreeViews(WebTestCase):
+    """For each demo lot the page shows the live listing, the command-line
+    run and the UI run. The first lot is an auction found running right now."""
+
+    def test_an_auction_that_is_live_right_now_is_found_and_run_first(self):
+        self.pages[OTHER] = ENDED
+        self.list_lots(OTHER, LOT, "https://www.propertyroom.com/l/never-reached/3")
+        app = self.app(live=False)
+        app.run_demo()
+        lots = app.state()["demo"]["lots"]
+        self.assertEqual(len(lots), 5)
+        live = lots[0]
+        self.assertTrue(live["live_now"])
+        self.assertEqual([lot["live_now"] for lot in lots[1:]], [False] * 4)
+        self.assertEqual(live["url"], LOT)             # OTHER came first but has ended
+        self.assertTrue(live["label"].endswith("live on PropertyRoom right now"))
+        # next bid $850 costs $1,099.20 all-in; a quarter above, rounded up to $10
+        self.assertEqual(live["all_in_max"], 1380.0)
+        self.assertEqual(live["listed"]["evaluation"]["verdict"], "BID")
+        self.assertIsNone(live["as_if_live"])
+        self.assertEqual(self.html_fetches, ["https://www.propertyroom.com/c/vehicles"])
+
+    def test_listing_is_what_the_lot_page_said_when_the_demo_ran(self):
+        self.list_lots(LOT)
+        app = self.app(live=False)
+        self.assertIsNone(app.state()["demo"]["lots"][0]["listing"])
+        app.run_demo()
+        lot = app.state()["demo"]["lots"][0]
+        self.assertEqual(lot["fetched_at"], "2026-11-23T12:00:00")
+        listing = lot["listing"]
+        self.assertEqual(listing["title"], "2007 Toyota Prius (Jamaica, NY 11430)")
+        self.assertEqual((listing["status"], listing["ends_text"]),
+                         ("live", "Ends Nov 30, 2026 at 05:00 PM (Eastern)"))
+        self.assertEqual((listing["current_price"], listing["bid_increment"], listing["premium_pct"]),
+                         (800.0, 50.0, 15.0))
+        self.assertEqual(listing["condition"], "Untested - Sold as-is")
+        self.assertIn({"method": "Customer Pick-up", "price_usd": 23.95, "available": True},
+                      listing["shipping_options"])
+
+    def test_command_line_view_is_the_command_and_what_it_prints_for_this_run(self):
+        self.list_lots(LOT)
+        app = self.app(live=False)
+        before = app.state()["demo"]["lots"][0]["cli"]
+        self.assertIsNone(before["output"])
+        app.run_demo()
+        live, ended = app.state()["demo"]["lots"][0], app.state()["demo"]["lots"][1]
+        self.assertEqual(live["cli"]["command"], f"python3 run_demo.py --lot {LOT} --max 1380")
+        output = live["cli"]["output"]
+        self.assertIn("FIXTURE MODE", output)
+        self.assertIn(f"LOT: {LOT}", output)
+        self.assertIn("All-in max: $1,380.00", output)
+        self.assertIn("VERDICT: BID", output)
+        self.assertIn("Bid request (NOT SENT):", output)
+        self.assertIn("COST LEDGER", output)
+        self.assertIn("Ledger file: cost_ledger.jsonl", output)
+        self.assertNotIn("AS-IF-LIVE", output)
+        # An ended lot's transcript carries both passes, as the command prints them.
+        self.assertIn("VERDICT: NO_BID", ended["cli"]["output"])
+        self.assertIn(">>> AS-IF-LIVE", ended["cli"]["output"])
+        self.assertEqual(ended["cli"]["command"],
+                         f"python3 run_demo.py --lot {DEMO_LOTS[0]['url']} --max 13500")
+
+    def test_command_names_the_live_model_and_the_transcript_says_so(self):
+        self.list_lots(LOT)
+        app = self.app()
+        app.run_demo()
+        cli = app.state()["demo"]["lots"][0]["cli"]
+        self.assertTrue(cli["command"].endswith(" --max 1380 --live-ember"))
+        self.assertIn("Mode: LIVE Muse Ember (muse-ember-1.0)", cli["output"])
+        self.assertNotIn("test-key", cli["output"])
+
+    def test_failed_lot_shows_the_failure_in_its_transcript(self):
+        self.pages[DEMO_LOTS[1]["url"]] = FetchError("PropertyRoom returned HTTP 503 for the lot")
+        app = self.app(live=False)
+        app.run_demo()
+        self.assertIn("FAILED to evaluate: PropertyRoom returned HTTP 503",
+                      app.state()["demo"]["lots"][1]["cli"]["output"])
+
+    def test_only_the_first_few_listed_lots_are_read_and_demo_lots_are_not_reused(self):
+        ended = [f"https://www.propertyroom.com/l/ended-lot/{n}" for n in range(1, 9)]
+        for url in ended:
+            self.pages[url] = ENDED
+        self.list_lots(DEMO_LOTS[0]["url"], *ended)
+        app = self.app(live=False)
+        app.run_demo()
+        self.assertEqual(self.fetches[:5], ended[:5])          # five tries, the demo lot skipped
+        self.assertEqual(len(self.fetches), 5 + 4)
+        self.assertEqual(len(app.state()["demo"]["lots"]), 4)   # no live lot found
+
+    def test_the_live_lot_is_kept_between_runs_until_it_ends(self):
+        self.list_lots(LOT, OTHER)
+        app = self.app(live=False)
+        app.run_demo()
+        app.run_demo()
+        self.assertEqual(len(self.html_fetches), 1)             # no second search
+        self.assertEqual(app.state()["demo"]["lots"][0]["url"], LOT)
+
+        self.pages[LOT] = ENDED
+        app.run_demo()                                          # it ended: shown as ended this once
+        ended = app.state()["demo"]["lots"][0]
+        self.assertEqual((ended["url"], ended["listed"]["evaluation"]["status"]), (LOT, "ended"))
+        app.run_demo()                                          # then replaced by the next live one
+        self.assertEqual(len(self.html_fetches), 2)
+        self.assertEqual(app.state()["demo"]["lots"][0]["url"], OTHER)
+
+    def test_demo_still_runs_when_the_listing_cannot_be_read(self):
+        self.listing_html = FetchError("PropertyRoom returned HTTP 503")
+        app = self.app(live=False)
+        app.run_demo()
+        lots = app.state()["demo"]["lots"]
+        self.assertEqual(len(lots), 4)
+        self.assertEqual(lots[0]["as_if_live"]["evaluation"]["verdict"], "BID")
 
 
 class TestMiniMarkdown(unittest.TestCase):

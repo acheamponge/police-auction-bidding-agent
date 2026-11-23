@@ -232,12 +232,22 @@ install.
 | Page | What it shows |
 |---|---|
 | Overview | What the agent does, the three traps, and where things stand |
-| Demo | The four demo lots run start to finish, as listed next to as-if-live |
+| Demo | An auction that is live right now, then the four demo lots. For each: the listing on PropertyRoom, the command-line run, and the UI run |
 | Lots | Paste a lot link and an all-in max; read the verdict, the bid plan and Ember's reasoning |
 | Policy | The spending gate in order, and your tax, pickup and delivery assumptions |
 | Ledger | Every model call with its tokens and cost, against the $10 |
 | Method | How a verdict is made, when the agent holds, and what is not built |
 | Command line | The section below, so the no-UI usage travels with the demo |
+
+The Demo page shows one lot three ways. First the listing, as the lot's
+own page reads at that moment, with a button that opens the real page
+(PropertyRoom does not allow its pages to be shown inside other sites, so
+the UI shows the listing's text, not a frame). Then the command line: the
+exact `run_demo.py` command for that lot and what it prints for the same
+run. Then the UI's own verdict cards. Each run starts by picking an auction
+that is live on PropertyRoom's vehicles listing, preferring one that prints
+a buyer's premium, and gives it an all-in max a quarter above what the next
+bid costs.
 
 It is a local demo, not a public site. It listens on `127.0.0.1` only,
 accepts changes only from its own pages, will only fetch PropertyRoom lot
@@ -259,6 +269,9 @@ python3 run_demo.py
 # Same demo on the real model
 python3 run_demo.py --live-ember
 
+# Also run an auction that is live on PropertyRoom right now
+python3 run_demo.py --live-lot
+
 # One lot of your own (dry-run; prints the bid it would place)
 python3 evaluate.py --lot https://www.propertyroom.com/l/.../12345678 \
   --max 1500 --tax-rate 0.10 --pickup-cost 0
@@ -269,7 +282,7 @@ python3 evaluate.py --lot https://www.propertyroom.com/l/.../12345678 --tax-rate
 # Watch lots until they end (copy watchlist.example.json to watchlist.json)
 python3 watch.py --watchlist watchlist.json --interval 300
 
-# Tests (131, no network, no API key)
+# Tests (149, no network, no API key)
 python3 -m unittest discover -s tests
 ```
 
@@ -333,12 +346,12 @@ itself, so it always agrees and gives no value estimate.
 | `src/policy.py` | Spending policy gate (SimCity pattern, adapted) |
 | `src/live_bid.py` | Gated live-bid path — refuses without config + confirm |
 | `src/watcher.py` | The watch loop: re-evaluates a lot only when it changed |
-| `src/demo.py` | The demo run and its assumptions, shared by `run_demo.py` and the UI |
+| `src/demo.py` | The demo run and its assumptions, finding a live auction, and what the command line prints; shared by `run_demo.py` and the UI |
 | `src/web.py` / `src/mini_markdown.py` | The UI's routes and JSON API; renders this README's command-line section into the UI |
 | `web/` | The UI: one shell, a fragment per page, one stylesheet, one script |
 | `src/config.py` / `src/cli.py` | Loads `.env` and `config.json`; flags shared by the scripts |
 | `src/demo_lots.py` | The four demo lots |
-| `tests/` + `tests/fixtures/` | 131 unit tests; fixtures mirror the layout of real lot pages |
+| `tests/` + `tests/fixtures/` | 149 unit tests; fixtures mirror the layout of real lot pages |
 | `config.example.json` / `watchlist.example.json` / `.env.example` | Templates (copy, never commit secrets) |
 | `cost_ledger.jsonl` | Ledger from the demo runs |
 
