@@ -2,9 +2,8 @@
 
 Placing a real bid needs a registered PropertyRoom account with a payment
 method on file, and bids are binding: on close the payment method is
-auto-charged and the item ships within 2 business days. Kwame has NOT
-provided an account or a payment method, so this module REFUSES every live
-attempt until then.
+auto-charged and the item ships within 2 business days. Until an account and
+a payment method are configured, this module REFUSES every live attempt.
 
 What this module does today:
   1. Builds the exact bid request the agent would send (lot id, bid amount,

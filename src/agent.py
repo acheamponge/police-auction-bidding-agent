@@ -3,11 +3,14 @@
 One `evaluate_lot()` call is one full agent run for one lot:
   1. Fetch the lot's own PropertyRoom page and parse its fee table.
   2. Send the page text to Muse Ember (one call; cost logged to the ledger).
-     Ember extracts the fields and gives a judgment; the deterministic parse
-     is the authority on money numbers.
+     Ember reads the same fields independently and judges the listing. The
+     deterministic parse is the authority on money numbers; Ember's read can
+     only turn a BID into a HOLD_FOR_HUMAN.
   3. Compute the all-in math and the verdict (BID / NO_BID / HOLD_FOR_HUMAN).
   4. Run the spending policy gate (SimCity pattern). In dry-run mode the
      agent prints the exact bid it would place and stops — no money moves.
+
+`evaluate_page()` is steps 2-4 for a page that is already fetched and parsed.
 """
 
 from __future__ import annotations
@@ -35,27 +38,33 @@ class BiddingAgent:
     def __init__(self, *, ledger: CostLedger,
                  tax_rate: float | None = None,
                  shipping_preference: str = "cheapest",
+                 pickup_cost_usd: float | None = None,
                  policy_config: PolicyConfig | None = None,
-                 ember_model: str | None = None):
+                 ember: EmberClient | None = None):
         self.ledger = ledger
         self.tax_rate = tax_rate
         self.shipping_preference = shipping_preference
+        self.pickup_cost_usd = pickup_cost_usd
         self.policy_state = PolicyState(config=policy_config or PolicyConfig())
-        self.ember = EmberClient(ledger=ledger,
-                                 **({"model": ember_model} if ember_model else {}))
+        self.ember = ember or EmberClient(ledger=ledger)
 
     def evaluate_lot(self, lot_url: str, all_in_max: float,
                      live: bool = False, confirm: bool = False) -> AgentResult:
         parsed, lot_text = fetch_and_parse(lot_url)
+        return self.evaluate_page(parsed, lot_text, lot_url, all_in_max,
+                                  live=live, confirm=confirm)
+
+    def evaluate_page(self, parsed: dict, lot_text: str, lot_url: str,
+                      all_in_max: float, live: bool = False,
+                      confirm: bool = False) -> AgentResult:
         ember_result = self.ember.evaluate_lot(lot_text, lot_url)
         evaluation = evaluate(
             parsed, ember_result, lot_url, all_in_max,
             tax_rate=self.tax_rate,
             shipping_preference=self.shipping_preference,
             allow_reserve_lots=self.policy_state.config.allow_reserve_lots,
+            pickup_cost_usd=self.pickup_cost_usd,
         )
-        evaluation.simulated = bool(
-            (ember_result.get("_meta") or {}).get("simulated"))
 
         decision = self.policy_state.evaluate(
             evaluation.verdict, evaluation.all_in_at_next_bid, lot_url)

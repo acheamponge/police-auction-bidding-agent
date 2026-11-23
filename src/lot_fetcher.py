@@ -7,7 +7,10 @@ Lot URLs look like:
 Fields the parser reads off the lot's OWN page (verified against live pages
 Nov 23, 2026):
     - title, listing id, item number
-    - status: live (countdown shown) or ended ("Ended <date> at <time> (Eastern)")
+    - status: live ("Ends <date> at <time> (Eastern)"), ended ("Ended <date>
+      at <time> (Eastern)"), or unknown when neither line is printed. Every
+      page carries the bare words "Ending" and "Ended" in its countdown
+      skeleton, so only the dated line counts.
     - current price ("Current Price US $X")
     - buyer's premium ("Buyer's Premium is non-refundable. NN.NN%") — the
       rate is READ, never hardcoded. If the page prints no premium line,
@@ -58,13 +61,18 @@ def fetch_lot_page(url: str, timeout_s: int = 30) -> str:
         raise FetchError(f"Could not reach PropertyRoom: {exc}") from exc
 
 
+_INVISIBLE_TAGS = ("script", "style", "noscript")
+
+
 class _TextExtractor(HTMLParser):
-    """Strip tags but keep line structure, so the fee labels stay findable."""
+    """Strip tags but keep line structure, so the fee labels stay findable.
+    Script and style bodies are dropped: they are not page text."""
 
     def __init__(self):
         super().__init__()
         self.lines: list[str] = []
         self._buf: list[str] = []
+        self._invisible_depth = 0
 
     def _flush(self):
         text = "".join(self._buf).strip()
@@ -73,15 +81,20 @@ class _TextExtractor(HTMLParser):
         self._buf = []
 
     def handle_starttag(self, tag, attrs):
+        if tag in _INVISIBLE_TAGS:
+            self._invisible_depth += 1
         if tag in ("br", "p", "div", "tr", "li", "h1", "h2", "h3", "td", "th"):
             self._flush()
 
     def handle_endtag(self, tag):
+        if tag in _INVISIBLE_TAGS:
+            self._invisible_depth = max(0, self._invisible_depth - 1)
         if tag in ("p", "div", "tr", "li", "h1", "h2", "h3", "td", "th"):
             self._flush()
 
     def handle_data(self, data):
-        self._buf.append(data)
+        if not self._invisible_depth:
+            self._buf.append(data)
 
 
 def html_to_text(html_text: str) -> str:
@@ -92,6 +105,22 @@ def html_to_text(html_text: str) -> str:
 
 
 _MONEY = r"\$?\s*([\d,]+\.\d{2})"
+_END_DATE = r"[A-Za-z]{3}\s+\d{1,2},\s+\d{4}\s+at\s+[\d:]+\s+[AP]M\s*\(Eastern\)"
+
+# The lot itself starts at its "Listing ID" line; everything above is site
+# navigation. The fee table, description and shipping table all sit within
+# the first ~17K characters after it on the pages checked.
+LOT_BODY_LIMIT_CHARS = 20_000
+
+
+def lot_body(text: str) -> str:
+    """The part of the page text worth sending to the model: from the lot's
+    title line (the line above "Listing ID") onward, capped in length."""
+    marker = text.find("Listing ID:")
+    if marker == -1:
+        return text[:LOT_BODY_LIMIT_CHARS]
+    title_start = text.rfind("\n", 0, max(0, text.rfind("\n", 0, marker))) + 1
+    return text[title_start:title_start + LOT_BODY_LIMIT_CHARS]
 
 
 def _money(pattern: str, text: str) -> float | None:
@@ -124,13 +153,10 @@ def parse_lot_text(text: str) -> dict:
 
     status = "unknown"
     ends_text = None
-    match = re.search(r"Ended\s+([A-Za-z]{3}\s+\d{1,2},\s+\d{4}\s+at\s+[\d:]+\s+[AP]M\s*\(Eastern\))",
-                      flat)
+    match = re.search(r"\b(Ended|Ends)\s+(" + _END_DATE + r")", flat)
     if match:
-        status = "ended"
-        ends_text = "Ended " + match.group(1)
-    elif re.search(r"Ending", flat):
-        status = "live"
+        status = "ended" if match.group(1) == "Ended" else "live"
+        ends_text = f"{match.group(1)} {match.group(2)}"
 
     current_price = _money(r"Current Price\s*(?:US)?\s*" + _MONEY, flat)
 

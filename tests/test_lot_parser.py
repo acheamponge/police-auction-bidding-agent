@@ -5,21 +5,17 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(__file__))
 
-from src.lot_fetcher import parse_lot_text
-
-FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
-
-
-def read_fixture(name):
-    with open(os.path.join(FIXTURES, name), encoding="utf-8") as fh:
-        return fh.read()
+from helpers import read_fixture
+from src.lot_fetcher import LOT_BODY_LIMIT_CHARS, html_to_text, lot_body, parse_lot_text
 
 
 class TestLotParser(unittest.TestCase):
     def test_vehicle_lot_reads_premium(self):
         parsed = parse_lot_text(read_fixture("lot_vehicle.txt"))
         self.assertEqual(parsed["status"], "ended")
+        self.assertEqual(parsed["ends_text"], "Ended Nov 11, 2026 at 05:20 PM (Eastern)")
         self.assertEqual(parsed["current_price"], 10850.00)
         self.assertEqual(parsed["premium_pct"], 12.00)
         self.assertTrue(parsed["premium_stated"])
@@ -34,6 +30,7 @@ class TestLotParser(unittest.TestCase):
     def test_reserve_lot_flagged(self):
         parsed = parse_lot_text(read_fixture("lot_reserve.txt"))
         self.assertTrue(parsed["reserve_not_met"])
+        self.assertEqual(parsed["status"], "live")
         self.assertEqual(parsed["premium_pct"], 15.00)
         self.assertEqual(parsed["current_price"], 4450.00)
 
@@ -48,6 +45,61 @@ class TestLotParser(unittest.TestCase):
         methods = {o["method"]: o for o in parsed["shipping_options"]}
         self.assertEqual(methods["Standard Shipping"]["price_usd"], 12.95)
         self.assertEqual(methods["Expedited Shipping"]["price_usd"], 24.95)
+
+    def test_countdown_skeleton_alone_is_not_a_status(self):
+        # Every page, live or ended, prints the bare words "Ending" and
+        # "Ended" in its countdown. Only the dated line says which it is.
+        text = read_fixture("lot_reserve.txt").replace(
+            "Ends Nov 30, 2026 at 06:24 PM (Eastern)\n", "")
+        self.assertIn("Ending\nEnded\n", text)
+        parsed = parse_lot_text(text)
+        self.assertEqual(parsed["status"], "unknown")
+        self.assertIsNone(parsed["ends_text"])
+
+    def test_ended_line_in_another_format_is_unknown(self):
+        text = read_fixture("lot_vehicle.txt").replace(
+            "Ended Nov 11, 2026 at 05:20 PM (Eastern)", "Ended 11/11/2026 5:20 PM ET")
+        self.assertEqual(parse_lot_text(text)["status"], "unknown")
+
+
+class TestHtmlToText(unittest.TestCase):
+    def setUp(self):
+        self.text = html_to_text(read_fixture("lot_page.html"))
+
+    def test_script_style_and_noscript_bodies_are_dropped(self):
+        for leaked in ("decoy", "9,999.00", "listingEndDate", "listing-timer", "$7.00"):
+            self.assertNotIn(leaked, self.text)
+
+    def test_real_page_layout_parses_end_to_end(self):
+        parsed = parse_lot_text(self.text)
+        self.assertEqual(parsed["title"], "2007 Toyota Prius (Jamaica, NY 11430)")
+        self.assertEqual(parsed["listing_id"], "18690397")
+        # The script holds a decoy "Ended ..." line and a decoy price.
+        self.assertEqual(parsed["status"], "live")
+        self.assertEqual(parsed["ends_text"], "Ends Nov 30, 2026 at 05:00 PM (Eastern)")
+        self.assertEqual(parsed["current_price"], 800.00)
+        self.assertEqual(parsed["premium_pct"], 15.00)
+        self.assertEqual(parsed["bid_increment"], 50.00)
+        methods = {o["method"]: o for o in parsed["shipping_options"]}
+        self.assertEqual(methods["Customer Pick-up"]["price_usd"], 23.95)
+        self.assertFalse(methods["Expedited Shipping"]["available"])
+
+
+class TestLotBody(unittest.TestCase):
+    def test_starts_at_the_title_line_and_keeps_the_shipping_table(self):
+        body = lot_body(html_to_text(read_fixture("lot_page.html")))
+        self.assertTrue(body.startswith("2007 Toyota Prius (Jamaica, NY 11430)\nListing ID: 18690397"))
+        self.assertNotIn("Sign Out", body)
+        self.assertIn("Customer Pick-up\n$23.95", body)
+
+    def test_is_capped(self):
+        long_text = "nav\nTitle\nListing ID: 1\n" + "x" * (LOT_BODY_LIMIT_CHARS * 2)
+        body = lot_body(long_text)
+        self.assertEqual(len(body), LOT_BODY_LIMIT_CHARS)
+        self.assertTrue(body.startswith("Title\nListing ID: 1"))
+
+    def test_page_without_a_listing_id_is_sent_from_the_top(self):
+        self.assertEqual(lot_body("just some text"), "just some text")
 
 
 if __name__ == "__main__":

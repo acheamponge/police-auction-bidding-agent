@@ -1,4 +1,4 @@
-"""The all-in math and the verdict. Money is deterministic; Ember judges.
+"""The all-in math and the verdict. Money is deterministic; Ember can only veto.
 
 All-in total for a hammer price H:
     premium  = H * premium_pct            (read off the lot page, never assumed)
@@ -7,23 +7,34 @@ All-in total for a hammer price H:
                                            the buyer's jurisdiction, labelled
                                            as such in every verdict)
     shipping = price of the chosen delivery method, read off the lot page
+               (plus your own cost of collecting it, for Customer Pick-up)
     all-in   = H + premium + tax + shipping
 
-The most the agent may bid (max hammer) for a given all-in max:
-    max_hammer = (all_in_max - shipping) / ((1 + premium_pct) * (1 + tax_rate))
+The most the agent may bid (max hammer) for a given all-in max is the largest
+whole-cent H whose all-in total is still within the max.
+
+Muse Ember reads the same page independently. Its read can only make the
+agent more careful, never less:
+    - if its numbers disagree with the deterministic parse, the lot is held;
+    - if its stance on the listing is not "bid", the lot is held;
+    - if the all-in total is above its top value estimate, the lot is held.
 
 Verdicts:
-    BID             — the next bid clears the math and no blocking flag is set.
-                      In dry-run mode this only PRINTS the exact bid.
+    BID             — the next bid clears the math, both reads of the page
+                      agree, and Ember raised no objection. In dry-run mode
+                      this only PRINTS the exact bid.
     NO_BID          — the math does not clear, or the auction is closed.
-    HOLD_FOR_HUMAN  — the all-in total cannot be fixed (premium / shipping /
-                      tax unknown) or the lot carries the soft-reserve trap
-                      and reserve lots are not allowed in config. A person
-                      decides; the agent never bids blind.
+    HOLD_FOR_HUMAN  — anything the agent cannot be sure of: the auction status,
+                      premium, shipping or tax is unknown, the two reads
+                      disagree, Ember objects, or the lot carries the
+                      soft-reserve trap and reserve lots are not allowed.
+                      A person decides; the agent never bids blind.
 """
 
 from __future__ import annotations
 
+import math
+import re
 from dataclasses import dataclass, field
 
 # Cards / PayPal cap on PropertyRoom: $4,999.99. At $5,000+ only wire works.
@@ -52,20 +63,44 @@ class Evaluation:
     ember_stance: str | None = None
     ember_reasoning: str | None = None
     simulated: bool = False
+    pickup_cost_usd: float | None = None
+    value_estimate_low: float | None = None
+    value_estimate_high: float | None = None
 
 
-def choose_shipping(parsed: dict, preference: str = "cheapest") -> tuple[str | None, float | None]:
-    """Pick a delivery method off the lot page. 'cheapest' = lowest-priced
-    available method (usually Customer Pick-up at $0.00)."""
-    options = [o for o in parsed.get("shipping_options", []) if o.get("available")]
-    if not options:
-        return None, None
+def _letters(text: str) -> str:
+    return re.sub(r"[^a-z]", "", text.lower())
+
+
+def _is_pickup(method: str) -> bool:
+    return "pickup" in _letters(method)
+
+
+def choose_shipping(parsed: dict, preference: str = "cheapest",
+                    pickup_cost_usd: float | None = None) -> tuple[str | None, float | None]:
+    """Pick a delivery method off the lot page and return (method, cost).
+
+    Customer Pick-up is never free in practice: someone has to travel to the
+    lot or pay to have it hauled. So pickup is only eligible when
+    pickup_cost_usd is set (0 if you are local), and that amount is added to
+    the pickup fee printed on the page. A named preference that the page does
+    not offer returns no method rather than silently switching to another.
+    """
+    candidates = []
+    for option in parsed.get("shipping_options", []):
+        if not option.get("available") or option.get("price_usd") is None:
+            continue
+        if _is_pickup(option["method"]):
+            if pickup_cost_usd is None:
+                continue
+            candidates.append((option["method"], round(option["price_usd"] + pickup_cost_usd, 2)))
+        else:
+            candidates.append((option["method"], option["price_usd"]))
     if preference != "cheapest":
-        for opt in options:
-            if preference.lower() in opt["method"].lower():
-                return opt["method"], opt["price_usd"]
-    best = min(options, key=lambda o: o["price_usd"] if o["price_usd"] is not None else float("inf"))
-    return best["method"], best["price_usd"]
+        candidates = [c for c in candidates if _letters(preference) in _letters(c[0])]
+    if not candidates:
+        return None, None
+    return min(candidates, key=lambda c: c[1])
 
 
 def all_in_total(hammer: float, premium_frac: float, tax_rate: float,
@@ -79,26 +114,97 @@ def all_in_total(hammer: float, premium_frac: float, tax_rate: float,
 
 def max_hammer_for(all_in_max: float, premium_frac: float, tax_rate: float,
                    shipping: float) -> float:
-    return round((all_in_max - shipping) / ((1 + premium_frac) * (1 + tax_rate)), 2)
+    """The largest whole-cent hammer price whose all-in total is within
+    all_in_max. Rounded down so it can never land a cent over; the one cent
+    above is taken only when its all-in total (itself rounded to cents)
+    still fits."""
+    cents = math.floor((all_in_max - shipping) / ((1 + premium_frac) * (1 + tax_rate)) * 100)
+    if all_in_total((cents + 1) / 100, premium_frac, tax_rate, shipping) <= all_in_max:
+        cents += 1
+    return max(cents, 0) / 100
+
+
+def _number(value) -> float | None:
+    """A number from the model's JSON. Accepts 15, 15.0, "15.00%", "$4,450.00"."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.replace("$", "").replace(",", "").replace("%", "").strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _same_number(a: float | None, b: float | None) -> bool:
+    if a is None or b is None:
+        return a is b
+    return abs(a - b) < 0.005
+
+
+def _model_shipping_option(ember_result: dict, method: str) -> dict | None:
+    wanted = _letters(method)
+    for option in ember_result.get("shipping_options") or []:
+        if not isinstance(option, dict):
+            continue
+        name = _letters(str(option.get("method") or ""))
+        if name and (name in wanted or wanted in name):
+            return option
+    return None
+
+
+def disagreements(parsed: dict, ember_result: dict) -> list[str]:
+    """Where Ember's read of the page differs from the deterministic parse.
+    An empty list means the two independent reads agree on every money field."""
+    found = []
+
+    def _show(value) -> str:
+        return "nothing" if value is None else str(value)
+
+    if parsed.get("status") != ember_result.get("status"):
+        found.append(f"auction status (parser: {_show(parsed.get('status'))}, "
+                     f"Ember: {_show(ember_result.get('status'))})")
+    for key, label in (("current_price", "current price"),
+                       ("premium_pct", "buyer's premium %"),
+                       ("bid_increment", "bid increment")):
+        ours, theirs = parsed.get(key), _number(ember_result.get(key))
+        if not _same_number(ours, theirs):
+            found.append(f"{label} (parser: {_show(ours)}, Ember: {_show(theirs)})")
+    if bool(parsed.get("reserve_not_met")) != bool(ember_result.get("reserve_not_met")):
+        found.append(f"reserve not met (parser: {bool(parsed.get('reserve_not_met'))}, "
+                     f"Ember: {bool(ember_result.get('reserve_not_met'))})")
+    for option in parsed.get("shipping_options", []):
+        if not option.get("available"):
+            continue
+        theirs = _model_shipping_option(ember_result, option["method"])
+        their_price = _number(theirs.get("price_usd")) if theirs else None
+        if not _same_number(option.get("price_usd"), their_price):
+            found.append(f"{option['method']} price (parser: {_show(option.get('price_usd'))}, "
+                         f"Ember: {_show(their_price)})")
+    return found
 
 
 def evaluate(parsed: dict, ember_result: dict, lot_url: str, all_in_max: float,
              tax_rate: float | None, shipping_preference: str = "cheapest",
-             allow_reserve_lots: bool = False) -> Evaluation:
-    """Combine the deterministic parse with Ember's judgment into a verdict.
+             allow_reserve_lots: bool = False,
+             pickup_cost_usd: float | None = None) -> Evaluation:
+    """Combine the deterministic parse with Ember's read into a verdict.
 
-    Money fields come from the deterministic parse (numbers must be exact);
-    Ember supplies the fuzzy judgment — reserve reading, condition risk, and
-    a second opinion on the premium/shipping lines.
+    The money numbers come from the deterministic parse. Ember's read is the
+    second opinion: it is compared field by field, and its stance and value
+    estimate can turn a BID into a HOLD_FOR_HUMAN, never the other way.
     """
+    judgment = ember_result.get("judgment") or {}
     risks: list[str] = []
-    for risk in (ember_result.get("judgment") or {}).get("risks", []):
-        if risk not in risks:
-            risks.append(risk)
 
     def _flag(text: str) -> None:
-        if text not in risks:
+        if text and text not in risks:
             risks.append(text)
+
+    for risk in judgment.get("risks") or []:
+        _flag(str(risk))
 
     premium_pct = parsed.get("premium_pct")
     premium_stated = bool(parsed.get("premium_stated"))
@@ -113,7 +219,17 @@ def evaluate(parsed: dict, ember_result: dict, lot_url: str, all_in_max: float,
     elif current_price is not None:
         next_bid = round(current_price, 2)
 
-    method, shipping = choose_shipping(parsed, shipping_preference)
+    method, shipping = choose_shipping(parsed, shipping_preference, pickup_cost_usd)
+    pickup_offered = any(o.get("available") and _is_pickup(o["method"])
+                         for o in parsed.get("shipping_options", []))
+    used_pickup = method is not None and _is_pickup(method)
+
+    stance = judgment.get("stance")
+    reasoning = judgment.get("reasoning")
+    value = ember_result.get("estimated_value_usd")
+    value = value if isinstance(value, dict) else {}
+    value_low, value_high = _number(value.get("low")), _number(value.get("high"))
+    mismatches = disagreements(parsed, ember_result)
 
     if parsed.get("reserve_not_met"):
         _flag("SOFT RESERVE — seller has 1 business day after close to "
@@ -124,10 +240,12 @@ def evaluate(parsed: dict, ember_result: dict, lot_url: str, all_in_max: float,
     if parsed.get("deposit_required"):
         _flag("this auction may require a refundable bid deposit")
     if method is None:
-        _flag("no deliverable shipping method stated on the page")
+        _flag("no usable delivery method on the page")
     if tax_rate is None:
         _flag("tax rate not configured — tax is not printed on the lot "
               "page, so the all-in total is a floor, not a ceiling")
+    for mismatch in mismatches:
+        _flag(f"the two reads of the page disagree on {mismatch}")
 
     max_hammer = None
     all_in_next = None
@@ -143,16 +261,34 @@ def evaluate(parsed: dict, ember_result: dict, lot_url: str, all_in_max: float,
     # -- verdict, in order -----------------------------------------------
     if status == "ended":
         verdict, reason = "NO_BID", "Auction already ended — nothing to bid on."
+    elif status != "live":
+        verdict, reason = ("HOLD_FOR_HUMAN",
+                           "Could not tell from the page whether this auction "
+                           "is still running. The agent only bids on a lot "
+                           "that prints an \"Ends <date>\" line.")
+    elif mismatches:
+        verdict, reason = ("HOLD_FOR_HUMAN",
+                           "Muse Ember's read of the page disagrees with the "
+                           "deterministic parse on: " + "; ".join(mismatches)
+                           + ". One of them misread the page, so a person "
+                           "checks it before any bid.")
     elif premium_pct is None:
         verdict, reason = ("HOLD_FOR_HUMAN",
                            "Buyer's premium is not stated on this lot page. "
                            "The all-in total cannot be fixed, so the agent "
                            "will not bid blind. A person checks the lot's "
                            "auction table / Bid Review page first.")
+    elif shipping is None and pickup_offered and pickup_cost_usd is None:
+        verdict, reason = ("HOLD_FOR_HUMAN",
+                           "The only way to get this lot is Customer Pick-up, "
+                           "and no pickup cost is configured. Collecting it is "
+                           "not free unless you are local: set a pickup cost "
+                           "(0 if you are) before bidding.")
     elif shipping is None:
         verdict, reason = ("HOLD_FOR_HUMAN",
-                           "No available delivery method on the lot page — "
-                           "shipping cost unknown, all-in total unfixable.")
+                           "No usable delivery method on the lot page for the "
+                           f"\"{shipping_preference}\" preference — shipping "
+                           "cost unknown, all-in total unfixable.")
     elif tax_rate is None:
         verdict, reason = ("HOLD_FOR_HUMAN",
                            "No tax rate configured. Tax is not printed on "
@@ -169,18 +305,32 @@ def evaluate(parsed: dict, ember_result: dict, lot_url: str, all_in_max: float,
         verdict, reason = ("HOLD_FOR_HUMAN",
                            "Could not read the current price or bid increment "
                            "off the lot page.")
-    elif next_bid > max_hammer:
+    elif all_in_next > all_in_max:
         verdict, reason = ("NO_BID",
                            f"Math does not clear: the next bid ${next_bid:,.2f} "
                            f"would land all-in at ${all_in_next:,.2f}, over the "
                            f"${all_in_max:,.2f} max (max hammer bid is "
                            f"${max_hammer:,.2f}).")
+    elif stance != "bid":
+        verdict, reason = ("HOLD_FOR_HUMAN",
+                           f"The math clears (all-in ${all_in_next:,.2f}), but "
+                           f"Muse Ember's stance on the listing is "
+                           f"\"{stance or 'missing'}\""
+                           + (f": {reasoning}" if reasoning else ".")
+                           + " A person decides.")
+    elif value_high is not None and all_in_next > value_high:
+        verdict, reason = ("HOLD_FOR_HUMAN",
+                           f"The math clears, but the all-in ${all_in_next:,.2f} "
+                           f"is above Muse Ember's top value estimate of "
+                           f"${value_high:,.2f}. A person decides whether it "
+                           "is worth it.")
     else:
         verdict, reason = ("BID",
                            f"Math clears: next bid ${next_bid:,.2f} lands "
                            f"all-in at ${all_in_next:,.2f}, inside the "
                            f"${all_in_max:,.2f} max (max hammer bid "
-                           f"${max_hammer:,.2f}).")
+                           f"${max_hammer:,.2f}). Both reads of the page agree "
+                           "and Muse Ember raised no objection.")
 
     return Evaluation(
         lot_url=lot_url,
@@ -200,15 +350,24 @@ def evaluate(parsed: dict, ember_result: dict, lot_url: str, all_in_max: float,
         verdict=verdict,
         reason=reason,
         risk_flags=risks,
-        ember_stance=(ember_result.get("judgment") or {}).get("stance"),
-        ember_reasoning=(ember_result.get("judgment") or {}).get("reasoning"),
+        ember_stance=stance,
+        ember_reasoning=reasoning,
         simulated=bool((ember_result.get("_meta") or {}).get("simulated")),
+        pickup_cost_usd=pickup_cost_usd if used_pickup else None,
+        value_estimate_low=value_low,
+        value_estimate_high=value_high,
     )
 
 
 def render(evaluation: Evaluation) -> str:
     """Human-readable verdict card."""
     e = evaluation
+    shipping_line = "Shipping: no usable delivery method on the page"
+    if e.shipping_method:
+        shipping_line = f"Shipping: {e.shipping_method} — ${e.shipping_cost:,.2f}"
+        if e.pickup_cost_usd is not None:
+            shipping_line += (f" (page fee plus your configured pickup cost of "
+                              f"${e.pickup_cost_usd:,.2f})")
     lines = [
         f"Lot: {e.title or e.lot_url}",
         f"URL: {e.lot_url}",
@@ -219,8 +378,7 @@ def render(evaluation: Evaluation) -> str:
          if e.premium_stated else "Buyer's premium: NOT STATED on the lot page — never assumed"),
         (f"Tax: {e.tax_rate:.2%} assumed rate (not printed on lot pages — configured assumption)"
          if e.tax_rate is not None else "Tax: rate not configured"),
-        (f"Shipping: {e.shipping_method} — ${e.shipping_cost:,.2f}"
-         if e.shipping_method else "Shipping: no available method on the page"),
+        shipping_line,
         f"All-in max: ${e.all_in_max:,.2f}",
         (f"Next bid to lead: ${e.next_bid:,.2f} -> all-in ${e.all_in_at_next_bid:,.2f} "
          f"(max hammer bid ${e.max_hammer:,.2f})"
@@ -232,9 +390,13 @@ def render(evaluation: Evaluation) -> str:
     if e.risk_flags:
         lines.append("Risk flags:")
         lines.extend(f"  - {flag}" for flag in e.risk_flags)
+    source = (" [SIMULATED — fixture mode, no model called]"
+              if e.simulated else " [live Muse Ember]")
+    if e.value_estimate_low is not None and e.value_estimate_high is not None:
+        lines.append(f"Ember value estimate: ${e.value_estimate_low:,.2f} to "
+                     f"${e.value_estimate_high:,.2f}{source}")
     if e.ember_stance:
         lines.append(f"Ember stance: {e.ember_stance}"
                      + (f" — {e.ember_reasoning}" if e.ember_reasoning else "")
-                     + (" [SIMULATED — fixture mode, no MODEL_API_KEY]"
-                        if e.simulated else " [live Muse Ember]"))
+                     + source)
     return "\n".join(lines)

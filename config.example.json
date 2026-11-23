@@ -1,1 +1,19 @@
-{"_comment":"Copy to config.json and fill in. Never commit real credentials. Live bidding stays OFF until live_bidding.configured is true AND you run with --live --confirm.","all_in_max_default_usd":1500.0,"live_bidding":{"configured":false,"note":"Set to true ONLY after registering a PropertyRoom account and putting a payment method on file. Even then, a bid needs --live --confirm on the command line. No account has been provided yet — do not invent one."},"policy":{"allow_reserve_lots":false,"session_budget_usd":2000.0,"tx_cap_note":"PropertyRoom card/PayPal ceiling. At $5,000+ only wire transfer works; the agent never wires money on its own.","tx_cap_usd":4999.99},"shipping_preference":"cheapest","tax_rate":0.1,"tax_rate_note":"Sales tax is NOT printed on PropertyRoom lot pages. Set this to the ship-to jurisdiction's combined rate. 0.10 is the demo assumption (Lynnwood, WA ~10%). If null, the agent holds every lot for a human."}
+{
+  "_comment": "Copy to config.json and fill in. Never commit real credentials. Command-line flags win over this file. Live bidding stays OFF until live_bidding.configured is true AND you run with --live --confirm.",
+  "all_in_max_default_usd": 1500.0,
+  "tax_rate": 0.1,
+  "tax_rate_note": "Sales tax is NOT printed on PropertyRoom lot pages. Set this to the ship-to jurisdiction's combined rate. 0.10 is the demo assumption (Lynnwood, WA ~10%). If null, the agent holds every lot for a human.",
+  "shipping_preference": "cheapest",
+  "pickup_cost_usd": null,
+  "pickup_cost_note": "What it costs YOU to collect a Customer Pick-up lot (travel, towing), added to the pickup fee on the page. 0 if you are local. If null, the agent never chooses pickup and holds pickup-only lots for a human.",
+  "policy": {
+    "tx_cap_usd": 4999.99,
+    "tx_cap_note": "PropertyRoom card/PayPal ceiling. At $5,000+ only wire transfer works; the agent never wires money on its own.",
+    "session_budget_usd": 2000.0,
+    "allow_reserve_lots": false
+  },
+  "live_bidding": {
+    "configured": false,
+    "note": "Set to true ONLY after registering a PropertyRoom account and putting a payment method on file. Even then, a bid needs --live --confirm on the command line, and the bid transport itself is not built yet."
+  }
+}

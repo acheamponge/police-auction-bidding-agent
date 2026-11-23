@@ -51,19 +51,38 @@ class TestPolicy(unittest.TestCase):
 
 
 class TestCostLedger(unittest.TestCase):
-    def test_budget_wall(self):
+    def record(self, ledger, cost_usd):
+        return ledger.record(lot_url="https://example.invalid/a", model="muse-ember-1.0",
+                             input_tokens=100, cached_input_tokens=0,
+                             output_tokens=100, cost_usd=cost_usd, simulated=False)
+
+    def test_budget_wall_refuses_a_call_before_it_is_made(self):
         import tempfile
         from src.cost_ledger import BudgetExceeded, CostLedger
         with tempfile.TemporaryDirectory() as tmp:
+            ledger = CostLedger(os.path.join(tmp, "ledger.jsonl"), budget_usd=0.01)
+            self.record(ledger, 0.005)
+            ledger.check_budget(0.005)  # lands exactly on the budget: allowed
+            with self.assertRaises(BudgetExceeded):
+                ledger.check_budget(0.0051)
+            self.assertEqual(ledger.summary()["calls"], 1)
+
+    def test_spend_is_always_recorded_even_past_the_budget(self):
+        # Once a call has been made the money is gone; hiding it from the
+        # ledger would make the running total a lie.
+        import json
+        import tempfile
+        from src.cost_ledger import CostLedger
+        with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "ledger.jsonl")
             ledger = CostLedger(path, budget_usd=0.01)
-            ledger.record(lot_url="https://example.invalid/a", model="muse-ember-1.0",
-                          input_tokens=100, cached_input_tokens=0,
-                          output_tokens=100, cost_usd=0.005, simulated=False)
-            with self.assertRaises(BudgetExceeded):
-                ledger.record(lot_url="https://example.invalid/b", model="muse-ember-1.0",
-                              input_tokens=100, cached_input_tokens=0,
-                              output_tokens=100, cost_usd=0.01, simulated=False)
+            self.record(ledger, 0.02)
+            self.assertEqual(ledger.summary()["total_spent_usd"], 0.02)
+            self.assertEqual(ledger.summary()["remaining_usd"], 0.0)
+            with open(path, encoding="utf-8") as fh:
+                self.assertEqual(json.loads(fh.read())["cost_usd"], 0.02)
+            # A fresh ledger on the same file picks the overspend back up.
+            self.assertEqual(CostLedger(path, budget_usd=0.01).total_usd, 0.02)
 
     def test_ember_pricing_math(self):
         from src.ember_client import price_call

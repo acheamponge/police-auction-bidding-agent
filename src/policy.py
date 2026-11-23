@@ -16,9 +16,8 @@ Rules, evaluated in order:
   4. Mode: DRY_RUN is the default — the agent only prints the exact bid it
      would place, for a human to approve. LIVE requires live bidding to be
      configured (a registered PropertyRoom account + payment method on file)
-     AND an explicit --live --confirm on the command line. Live bidding is
-     NOT configured for Kwame yet — no account has been provided — so every
-     live attempt is refused until then.
+     AND an explicit --live --confirm on the command line. Until an account
+     is configured, every live attempt is refused.
 """
 
 from __future__ import annotations

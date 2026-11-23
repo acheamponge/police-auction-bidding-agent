@@ -1,9 +1,11 @@
 """Cost ledger: every Muse Ember call is logged, and the $10 budget is a wall.
 
 The ledger is a JSONL file — one line per model call — plus a running total.
-`record()` refuses a call that would push cumulative spend over the budget
-(default $10.00, the entire hackathon budget), so the agent cannot spend
-past the credits even by accident.
+`check_budget()` is the wall: the client calls it BEFORE each request with a
+high estimate of the call's cost, and it refuses a call that could push
+cumulative spend over the budget (default $10.00, the entire hackathon
+budget). `record()` then writes down what the call really cost. It never
+refuses, because by then the money is spent and the ledger must show it.
 
 Ledger lines carry: timestamp, lot URL, model, input/cached/output tokens,
 cost, simulated flag, and the running total after the call.
@@ -62,7 +64,6 @@ class CostLedger:
     def record(self, *, lot_url: str, model: str, input_tokens: int,
                cached_input_tokens: int, output_tokens: int,
                cost_usd: float, simulated: bool) -> dict:
-        self.check_budget(cost_usd)
         self.total_usd += cost_usd
         self.calls += 1
         if simulated:
