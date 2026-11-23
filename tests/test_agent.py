@@ -78,7 +78,7 @@ class TestEmberClient(AgentTestCase):
         self.assertEqual(request["body"]["reasoning_effort"], "low")
         prompt = request["body"]["messages"][1]["content"]
         self.assertIn("Listing ID: 18690397", prompt)
-        self.assertIn("Customer Pick-up\n$23.95", prompt)
+        self.assertIn("New York 11430\n$23.95", prompt)
         self.assertNotIn("Sign Out", prompt)
 
         expected_cost = price_call(4000, 1000, 500)
@@ -138,11 +138,64 @@ class TestBiddingAgent(AgentTestCase):
         self.assertEqual(result.evaluation.all_in_at_next_bid, 1099.20)
         self.assertIn("Bid request (NOT SENT)", result.bid_request_text)
         self.assertIn("listing id: 18690397", result.bid_request_text)
-        self.assertIn("hammer bid: $850.00", result.bid_request_text)
-        self.assertIn("all-in at that bid: $1,099.20", result.bid_request_text)
+        # Proxy maximum: the highest whole dollar whose all-in fits the
+        # $1,500 max. 1,166 * 1.265 + 23.95 = 1,498.94.
+        self.assertIn("proxy bid, maximum: $1,166.00", result.bid_request_text)
+        self.assertIn("bids now: $850.00", result.bid_request_text)
+        self.assertIn("all-in at most: $1,498.94", result.bid_request_text)
         self.assertIsNone(result.live_outcome)
         self.assertEqual(agent.policy_state.exposure_usd, 0.0)
         self.assertIn("SIMULATED", render_result(result))
+
+    def test_proxy_maximum_is_kept_inside_what_the_policy_has_left(self):
+        # $1,200 session budget: a proxy sized to the $1,500 max alone would
+        # commit $1,498.94 and be denied. Sized to the headroom it goes through.
+        ledger = self.ledger()
+        agent = self.agent(ledger, EmberClient(ledger=ledger, api_key="", transport=no_transport),
+                           session_budget_usd=1_200.00)
+        result = agent.evaluate_page(self.parsed, self.text, URL, all_in_max=1_500.00)
+        self.assertEqual(result.policy_decision, "DRY_RUN")
+        # (1,200 - 23.95) / 1.265 = 929.68 -> $929, and $930 would go over
+        self.assertEqual(result.evaluation.bid_amount, 929.00)
+        self.assertLessEqual(result.evaluation.all_in_at_bid, 1_200.00)
+        self.assertGreater(result.evaluation.all_in_at_bid, 1_198.00)
+        self.assertIn("spending policy", result.evaluation.bid_note)
+
+    def test_policy_judges_the_most_a_bid_can_cost_and_denies_past_the_budget(self):
+        # Next bid all-in is $1,099.20; with $1,000 left even that is too much.
+        ledger = self.ledger()
+        agent = self.agent(ledger, EmberClient(ledger=ledger, api_key="", transport=no_transport),
+                           session_budget_usd=1_000.00)
+        result = agent.evaluate_page(self.parsed, self.text, URL, all_in_max=1_500.00)
+        self.assertEqual(result.evaluation.verdict, "BID")
+        self.assertEqual(result.policy_decision, "DENIED")
+        self.assertIsNone(result.bid_request_text)
+
+    def test_everyday_lot_with_no_premium_gets_a_bid_plan_in_fixture_mode(self):
+        text = read_fixture("lot_no_premium.txt").replace("US $4,620.00", "US $46.00")
+        ledger = self.ledger()
+        agent = BiddingAgent(ledger=ledger, tax_rate=0.10,
+                             ember=EmberClient(ledger=ledger, api_key="", transport=no_transport))
+        result = agent.evaluate_page(parse_lot_text(text), text, URL, all_in_max=200.00)
+        self.assertEqual(result.evaluation.verdict, "BID")
+        self.assertTrue(result.evaluation.premium_absent)
+        self.assertEqual(result.evaluation.shipping_method, "Standard Shipping")
+        # next bid 66 + 10% tax + $12.95 shipping, no premium
+        self.assertEqual(result.evaluation.all_in_at_next_bid, 85.55)
+        self.assertEqual(result.policy_decision, "DRY_RUN")
+        # (200 - 12.95) / 1.10 = 170.05 -> $170
+        self.assertIn("proxy bid, maximum: $170.00", result.bid_request_text)
+        self.assertIn("bids now: $66.00", result.bid_request_text)
+
+    def test_no_max_holds_and_suggests_one_from_the_models_low_estimate(self):
+        ledger = self.ledger()
+        reply = model_read(self.parsed, estimated_value_usd={"low": 1_200, "high": 2_000})
+        client, _ = self.live_client(ledger, json.dumps(reply))
+        result = self.agent(ledger, client).evaluate_page(self.parsed, self.text, URL, None)
+        self.assertEqual(result.evaluation.verdict, "HOLD_FOR_HUMAN")
+        self.assertEqual(result.evaluation.suggested_all_in_max, 1_200.0)
+        self.assertEqual(result.policy_decision, "DENIED")
+        self.assertIsNone(result.bid_request_text)
 
     def test_model_objection_stops_the_bid_end_to_end(self):
         ledger = self.ledger()

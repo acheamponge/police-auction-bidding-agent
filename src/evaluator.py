@@ -1,7 +1,10 @@
-"""The all-in math and the verdict. Money is deterministic; Ember can only veto.
+"""The all-in math, the verdict and the bid plan. Money is deterministic;
+Ember can only veto.
 
 All-in total for a hammer price H:
-    premium  = H * premium_pct            (read off the lot page, never assumed)
+    premium  = H * premium_pct            (read off the lot page, never assumed;
+                                           none when the auction table states
+                                           none, which is PropertyRoom's rule)
     tax      = (H + premium) * tax_rate   (tax is NOT on the lot page — the
                                            rate is a configured assumption for
                                            the buyer's jurisdiction, labelled
@@ -19,15 +22,28 @@ agent more careful, never less:
     - if its stance on the listing is not "bid", the lot is held;
     - if the all-in total is above its top value estimate, the lot is held.
 
+The bid plan. PropertyRoom takes proxy bids: you set a maximum and it bids
+the lowest amount needed to lead, never more. A bid in an auction's last
+minute extends the auction, so there is nothing to gain from bidding late.
+The plan is therefore a proxy bid whose maximum is the highest whole-dollar
+hammer price that keeps the all-in total inside every limit: your all-in max,
+the top of Ember's value estimate, and what the spending policy has left.
+One exception: when the reserve is not met, PropertyRoom bids a proxy's full
+maximum at once, so the agent places a plain bid at the next increment.
+
+With no all-in max the agent never bids. It reports what Ember's value
+estimate would support and holds for a human.
+
 Verdicts:
     BID             — the next bid clears the math, both reads of the page
                       agree, and Ember raised no objection. In dry-run mode
                       this only PRINTS the exact bid.
     NO_BID          — the math does not clear, or the auction is closed.
     HOLD_FOR_HUMAN  — anything the agent cannot be sure of: the auction status,
-                      premium, shipping or tax is unknown, the two reads
-                      disagree, Ember objects, or the lot carries the
-                      soft-reserve trap and reserve lots are not allowed.
+                      premium, shipping or tax is unknown, no all-in max was
+                      given, the two reads disagree, Ember objects, or the
+                      lot carries the soft-reserve trap and reserve lots are
+                      not allowed.
                       A person decides; the agent never bids blind.
 """
 
@@ -56,7 +72,7 @@ class Evaluation:
     shipping_cost: float | None
     max_hammer: float | None
     all_in_at_next_bid: float | None
-    all_in_max: float
+    all_in_max: float | None
     verdict: str
     reason: str
     risk_flags: list = field(default_factory=list)
@@ -66,6 +82,14 @@ class Evaluation:
     pickup_cost_usd: float | None = None
     value_estimate_low: float | None = None
     value_estimate_high: float | None = None
+    value_basis: str | None = None
+    premium_absent: bool = False
+    suggested_all_in_max: float | None = None
+    # The bid plan, set only when the verdict is BID.
+    bid_amount: float | None = None      # what to enter on the site
+    bid_is_proxy: bool = False           # True: bid_amount is a proxy maximum
+    all_in_at_bid: float | None = None   # the most this bid can cost, all-in
+    bid_note: str | None = None
 
 
 def _letters(text: str) -> str:
@@ -186,15 +210,49 @@ def disagreements(parsed: dict, ember_result: dict) -> list[str]:
     return found
 
 
-def evaluate(parsed: dict, ember_result: dict, lot_url: str, all_in_max: float,
+def plan_bid(next_bid: float, reserve_not_met: bool, limits: list,
+             premium_frac: float, tax_rate: float, shipping: float) -> tuple[float, bool, str]:
+    """Decide what to enter on the site: (amount, is_proxy, note).
+
+    `limits` is a list of (name, all-in dollars); the tightest one sets the
+    proxy maximum.
+    """
+    if reserve_not_met:
+        return next_bid, False, (
+            "Plain bid, not a proxy: the reserve is not met, and PropertyRoom "
+            "bids a proxy's full maximum at once when it is below the reserve.")
+    limit_name, limit = min(limits, key=lambda item: item[1])
+    ceiling = float(math.floor(max_hammer_for(limit, premium_frac, tax_rate, shipping)))
+    if ceiling <= next_bid:
+        next_all_in = all_in_total(next_bid, premium_frac, tax_rate, shipping)
+        if next_all_in > limit:
+            return next_bid, False, (
+                f"No room for a proxy: the next bid's all-in of ${next_all_in:,.2f} "
+                f"is over {limit_name} (${limit:,.2f}).")
+        return next_bid, False, (
+            f"Plain bid: the next bid is already at the ceiling set by "
+            f"{limit_name} (${limit:,.2f} all-in).")
+    return ceiling, True, (
+        f"Proxy bid with a maximum of ${ceiling:,.2f}. PropertyRoom bids the "
+        f"lowest amount needed to lead (${next_bid:,.2f} now) and never more "
+        f"than the maximum. The ceiling is set by {limit_name} "
+        f"(${limit:,.2f} all-in).")
+
+
+def evaluate(parsed: dict, ember_result: dict, lot_url: str, all_in_max: float | None,
              tax_rate: float | None, shipping_preference: str = "cheapest",
              allow_reserve_lots: bool = False,
-             pickup_cost_usd: float | None = None) -> Evaluation:
+             pickup_cost_usd: float | None = None,
+             spend_limit_usd: float | None = None) -> Evaluation:
     """Combine the deterministic parse with Ember's read into a verdict.
 
     The money numbers come from the deterministic parse. Ember's read is the
     second opinion: it is compared field by field, and its stance and value
     estimate can turn a BID into a HOLD_FOR_HUMAN, never the other way.
+
+    all_in_max may be None: the agent then never bids, and suggests a max
+    from Ember's low value estimate. spend_limit_usd is what the spending
+    policy has left; it caps a proxy bid's maximum.
     """
     judgment = ember_result.get("judgment") or {}
     risks: list[str] = []
@@ -208,6 +266,7 @@ def evaluate(parsed: dict, ember_result: dict, lot_url: str, all_in_max: float,
 
     premium_pct = parsed.get("premium_pct")
     premium_stated = bool(parsed.get("premium_stated"))
+    premium_absent = premium_pct is None and bool(parsed.get("premium_absent"))
     current_price = parsed.get("current_price")
     bid_increment = parsed.get("bid_increment")
     status = parsed.get("status", "unknown")
@@ -229,7 +288,10 @@ def evaluate(parsed: dict, ember_result: dict, lot_url: str, all_in_max: float,
     value = ember_result.get("estimated_value_usd")
     value = value if isinstance(value, dict) else {}
     value_low, value_high = _number(value.get("low")), _number(value.get("high"))
+    value_basis = value.get("basis") if isinstance(value.get("basis"), str) else None
     mismatches = disagreements(parsed, ember_result)
+    suggested_max = value_low if all_in_max is None else None
+    budget = all_in_max if all_in_max is not None else suggested_max
 
     if parsed.get("reserve_not_met"):
         _flag("SOFT RESERVE — seller has 1 business day after close to "
@@ -239,6 +301,9 @@ def evaluate(parsed: dict, ember_result: dict, lot_url: str, all_in_max: float,
         _flag("sold as-is, untested — condition risk is on the buyer")
     if parsed.get("deposit_required"):
         _flag("this auction may require a refundable bid deposit")
+    if premium_absent:
+        _flag("no buyer's premium in the auction table — the Bid Review "
+              "page, shown before a bid is final, is the last word on fees")
     if method is None:
         _flag("no usable delivery method on the page")
     if tax_rate is None:
@@ -249,14 +314,20 @@ def evaluate(parsed: dict, ember_result: dict, lot_url: str, all_in_max: float,
 
     max_hammer = None
     all_in_next = None
-    premium_frac = premium_pct / 100.0 if premium_pct is not None else None
+    if premium_pct is not None:
+        premium_frac = premium_pct / 100.0
+    else:
+        premium_frac = 0.0 if premium_absent else None
     if (premium_frac is not None and tax_rate is not None
             and shipping is not None and next_bid is not None):
-        max_hammer = max_hammer_for(all_in_max, premium_frac, tax_rate, shipping)
+        if budget is not None:
+            max_hammer = max_hammer_for(budget, premium_frac, tax_rate, shipping)
         all_in_next = all_in_total(next_bid, premium_frac, tax_rate, shipping)
         if all_in_next >= 5_000:
             _flag("all-in >= $5,000 — cards/PayPal capped at $4,999.99, "
                   "wire transfer only, due in full within 72 hours")
+
+    bid_amount, bid_is_proxy, all_in_at_bid, bid_note = None, False, None, None
 
     # -- verdict, in order -----------------------------------------------
     if status == "ended":
@@ -272,12 +343,13 @@ def evaluate(parsed: dict, ember_result: dict, lot_url: str, all_in_max: float,
                            "deterministic parse on: " + "; ".join(mismatches)
                            + ". One of them misread the page, so a person "
                            "checks it before any bid.")
-    elif premium_pct is None:
+    elif premium_frac is None:
         verdict, reason = ("HOLD_FOR_HUMAN",
-                           "Buyer's premium is not stated on this lot page. "
-                           "The all-in total cannot be fixed, so the agent "
-                           "will not bid blind. A person checks the lot's "
-                           "auction table / Bid Review page first.")
+                           "This lot page mentions a buyer's premium but no "
+                           "rate could be read from it. The all-in total "
+                           "cannot be fixed, so the agent will not bid blind. "
+                           "A person checks the lot's auction table / Bid "
+                           "Review page first.")
     elif shipping is None and pickup_offered and pickup_cost_usd is None:
         verdict, reason = ("HOLD_FOR_HUMAN",
                            "The only way to get this lot is Customer Pick-up, "
@@ -305,6 +377,19 @@ def evaluate(parsed: dict, ember_result: dict, lot_url: str, all_in_max: float,
         verdict, reason = ("HOLD_FOR_HUMAN",
                            "Could not read the current price or bid increment "
                            "off the lot page.")
+    elif all_in_max is None:
+        verdict, reason = ("HOLD_FOR_HUMAN",
+                           "No all-in max was given, so the agent will not bid. "
+                           + (f"Muse Ember values this lot at ${value_low:,.2f} to "
+                              f"${value_high:,.2f}. A max of ${suggested_max:,.2f}, "
+                              f"its low estimate, would allow a hammer bid up to "
+                              f"${max_hammer:,.2f}; the next bid lands all-in at "
+                              f"${all_in_next:,.2f}"
+                              + (", which is already past it" if all_in_next > suggested_max else "")
+                              + ". Re-run with that max, or your own, to act on it."
+                              if suggested_max is not None and value_high is not None
+                              else "There is no value estimate to suggest one "
+                                   "from; pass your own max."))
     elif all_in_next > all_in_max:
         verdict, reason = ("NO_BID",
                            f"Math does not clear: the next bid ${next_bid:,.2f} "
@@ -331,6 +416,15 @@ def evaluate(parsed: dict, ember_result: dict, lot_url: str, all_in_max: float,
                            f"${all_in_max:,.2f} max (max hammer bid "
                            f"${max_hammer:,.2f}). Both reads of the page agree "
                            "and Muse Ember raised no objection.")
+        limits = [("your all-in max", all_in_max)]
+        if value_high is not None:
+            limits.append(("Muse Ember's top value estimate", value_high))
+        if spend_limit_usd is not None:
+            limits.append(("what the spending policy has left", spend_limit_usd))
+        bid_amount, bid_is_proxy, bid_note = plan_bid(
+            next_bid, bool(parsed.get("reserve_not_met")), limits,
+            premium_frac, tax_rate, shipping)
+        all_in_at_bid = all_in_total(bid_amount, premium_frac, tax_rate, shipping)
 
     return Evaluation(
         lot_url=lot_url,
@@ -356,7 +450,19 @@ def evaluate(parsed: dict, ember_result: dict, lot_url: str, all_in_max: float,
         pickup_cost_usd=pickup_cost_usd if used_pickup else None,
         value_estimate_low=value_low,
         value_estimate_high=value_high,
+        value_basis=value_basis,
+        premium_absent=premium_absent,
+        suggested_all_in_max=suggested_max,
+        bid_amount=bid_amount,
+        bid_is_proxy=bid_is_proxy,
+        all_in_at_bid=all_in_at_bid,
+        bid_note=bid_note,
     )
+
+
+def _gap(cost: float, value: float) -> str:
+    """How far a cost sits from a value: "$400.80 below" / "$599.20 above"."""
+    return f"${abs(value - cost):,.2f} {'below' if cost <= value else 'above'}"
 
 
 def render(evaluation: Evaluation) -> str:
@@ -368,25 +474,43 @@ def render(evaluation: Evaluation) -> str:
         if e.pickup_cost_usd is not None:
             shipping_line += (f" (page fee plus your configured pickup cost of "
                               f"${e.pickup_cost_usd:,.2f})")
+    if e.premium_stated:
+        premium_line = f"Buyer's premium: {e.premium_pct:.2f}% (read off the lot page)"
+    elif e.premium_absent:
+        premium_line = ("Buyer's premium: none (the auction table states none; "
+                        "PropertyRoom states it there when a lot has one)")
+    else:
+        premium_line = "Buyer's premium: mentioned on the page but no rate could be read"
+    if e.all_in_max is not None:
+        max_line = f"All-in max: ${e.all_in_max:,.2f}"
+    elif e.suggested_all_in_max is not None:
+        max_line = (f"All-in max: not given (suggested: ${e.suggested_all_in_max:,.2f}, "
+                    "Ember's low value estimate)")
+    else:
+        max_line = "All-in max: not given"
+    if e.next_bid is None or e.all_in_at_next_bid is None:
+        next_line = "Next bid / all-in: cannot be computed from this page"
+    else:
+        next_line = f"Next bid to lead: ${e.next_bid:,.2f} -> all-in ${e.all_in_at_next_bid:,.2f}"
+        if e.max_hammer is not None:
+            next_line += f" (max hammer bid ${e.max_hammer:,.2f})"
     lines = [
         f"Lot: {e.title or e.lot_url}",
         f"URL: {e.lot_url}",
         f"Status: {e.status}",
         f"Current price: ${e.current_price:,.2f}" if e.current_price is not None else "Current price: not read",
         f"Bid increment: ${e.bid_increment:,.2f}" if e.bid_increment is not None else "Bid increment: not read",
-        (f"Buyer's premium: {e.premium_pct:.2f}% (read off the lot page)"
-         if e.premium_stated else "Buyer's premium: NOT STATED on the lot page — never assumed"),
+        premium_line,
         (f"Tax: {e.tax_rate:.2%} assumed rate (not printed on lot pages — configured assumption)"
          if e.tax_rate is not None else "Tax: rate not configured"),
         shipping_line,
-        f"All-in max: ${e.all_in_max:,.2f}",
-        (f"Next bid to lead: ${e.next_bid:,.2f} -> all-in ${e.all_in_at_next_bid:,.2f} "
-         f"(max hammer bid ${e.max_hammer:,.2f})"
-         if e.next_bid is not None and e.all_in_at_next_bid is not None
-         else "Next bid / all-in: cannot be computed from this page"),
+        max_line,
+        next_line,
         f"VERDICT: {e.verdict}",
         f"Reason: {e.reason}",
     ]
+    if e.bid_note:
+        lines.append(f"Bid plan: {e.bid_note} All-in at most ${e.all_in_at_bid:,.2f}.")
     if e.risk_flags:
         lines.append("Risk flags:")
         lines.extend(f"  - {flag}" for flag in e.risk_flags)
@@ -394,7 +518,12 @@ def render(evaluation: Evaluation) -> str:
               if e.simulated else " [live Muse Ember]")
     if e.value_estimate_low is not None and e.value_estimate_high is not None:
         lines.append(f"Ember value estimate: ${e.value_estimate_low:,.2f} to "
-                     f"${e.value_estimate_high:,.2f}{source}")
+                     f"${e.value_estimate_high:,.2f}"
+                     + (f" — {e.value_basis}" if e.value_basis else "") + source)
+        if e.all_in_at_next_bid is not None:
+            lines.append("Value vs cost: the next bid's all-in is "
+                         + _gap(e.all_in_at_next_bid, e.value_estimate_low) + " the low estimate and "
+                         + _gap(e.all_in_at_next_bid, e.value_estimate_high) + " the high estimate")
     if e.ember_stance:
         lines.append(f"Ember stance: {e.ember_stance}"
                      + (f" — {e.ember_reasoning}" if e.ember_reasoning else "")

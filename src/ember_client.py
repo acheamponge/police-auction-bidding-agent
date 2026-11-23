@@ -86,8 +86,10 @@ other text — with exactly these fields:
   "condition": string or null,           // e.g. "Untested - Sold as-is"
   "shipping_options": [{"method": string, "price_usd": number or null, "available": true/false}],
   "deposit_required": true/false,        // true if the page mentions a bid deposit
-  "estimated_value_usd": {"low": number, "high": number} or null,
-                                         // what this exact item, in this condition, would fairly sell for; null if you cannot tell
+  "estimated_value_usd": {"low": number, "high": number, "basis": string} or null,
+                                         // what this exact item, in the condition described, would fairly sell for
+                                         // second-hand; basis is one short sentence on what you compared it to.
+                                         // null if you cannot tell
   "judgment": {
     "stance": "bid" | "no_bid" | "hold",
     "risks": [string],                   // short risk flags, e.g. "no keys", "does not start", "salvage title"
@@ -102,10 +104,13 @@ false and a null price where it says "Not Available".
 
 Your stance is about the item itself, the things the numbers cannot see. Use "hold" when a \
 careful buyer would want to look closer first and "no_bid" when it should be avoided, and base \
-it on specific red flags the listing states or leaves blank: it does not start or run, or \
-that is unknown; no key; no title, or a salvage / parts-only title; mileage unknown or not \
-credible; specific damage or missing parts called out; a description that does not match the \
-item. Boilerplate that every PropertyRoom listing carries is NOT a red flag on its own: "sold \
+it on specific red flags the listing states or leaves blank. For a vehicle: it does not start \
+or run, or that is unknown; no key; no title, or a salvage / parts-only title; mileage unknown \
+or not credible. For anything else: it is listed for parts or not working; a part it needs to \
+work is missing (charger, battery, remote, SIM); the lot is a mixed or unspecified quantity; \
+jewelry or a watch with no metal, stone or authenticity details; a brand item that reads as a \
+replica. For any lot: specific damage called out, or a description that does not match the \
+title. Boilerplate that every PropertyRoom listing carries is NOT a red flag on its own: "sold \
 as-is", "untested", "not inspected by a certified mechanic", and damage fields that only say \
 "see images" (you cannot see the images; list that as a risk, but do not hold for it alone). \
 Do NOT hold because of the reserve, the fees, the price or the buyer's budget — those are \
@@ -233,13 +238,15 @@ class EmberClient:
     def _fixture_evaluate(lot_text: str) -> dict:
         parsed = parse_lot_text(lot_text)
         risks = []
-        if parsed.get("premium_pct") is None:
-            risks.append("no buyer's premium stated on the page — all-in total cannot be fixed")
+        premium_known = (parsed.get("premium_pct") is not None
+                         or parsed.get("premium_absent"))
+        if not premium_known:
+            risks.append("a buyer's premium is mentioned but no rate could be read")
         stance = "hold"
         if parsed.get("status") == "ended":
             stance = "no_bid"
             risks.append("auction already ended")
-        elif parsed.get("status") == "live" and parsed.get("premium_pct") is not None:
+        elif parsed.get("status") == "live" and premium_known:
             stance = "bid"
         return {
             "current_price": parsed.get("current_price"),

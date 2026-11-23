@@ -48,14 +48,14 @@ class BiddingAgent:
         self.policy_state = PolicyState(config=policy_config or PolicyConfig())
         self.ember = ember or EmberClient(ledger=ledger)
 
-    def evaluate_lot(self, lot_url: str, all_in_max: float,
+    def evaluate_lot(self, lot_url: str, all_in_max: float | None,
                      live: bool = False, confirm: bool = False) -> AgentResult:
         parsed, lot_text = fetch_and_parse(lot_url)
         return self.evaluate_page(parsed, lot_text, lot_url, all_in_max,
                                   live=live, confirm=confirm)
 
     def evaluate_page(self, parsed: dict, lot_text: str, lot_url: str,
-                      all_in_max: float, live: bool = False,
+                      all_in_max: float | None, live: bool = False,
                       confirm: bool = False) -> AgentResult:
         ember_result = self.ember.evaluate_lot(lot_text, lot_url)
         evaluation = evaluate(
@@ -64,10 +64,13 @@ class BiddingAgent:
             shipping_preference=self.shipping_preference,
             allow_reserve_lots=self.policy_state.config.allow_reserve_lots,
             pickup_cost_usd=self.pickup_cost_usd,
+            spend_limit_usd=self.policy_state.headroom_usd,
         )
 
+        # The gate judges the most the bid can cost: a proxy bid commits you
+        # up to its maximum, not just to the next increment.
         decision = self.policy_state.evaluate(
-            evaluation.verdict, evaluation.all_in_at_next_bid, lot_url)
+            evaluation.verdict, evaluation.all_in_at_bid, lot_url)
 
         bid_text = None
         live_outcome = None
@@ -83,8 +86,7 @@ class BiddingAgent:
                 try:
                     live_outcome = place_bid(bid, self.policy_state,
                                              confirmed=True)
-                    self.policy_state.commit(lot_url,
-                                             evaluation.all_in_at_next_bid)
+                    self.policy_state.commit(lot_url, evaluation.all_in_at_bid)
                 except LiveBiddingNotConfigured as exc:
                     live_outcome = f"REFUSED: {exc}"
             else:

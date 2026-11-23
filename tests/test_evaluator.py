@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
 from helpers import model_read, read_fixture
-from src.evaluator import all_in_total, choose_shipping, evaluate, max_hammer_for
+from src.evaluator import all_in_total, choose_shipping, evaluate, max_hammer_for, render
 from src.lot_fetcher import parse_lot_text
 
 URL = "https://example.invalid/lot"
@@ -119,12 +119,24 @@ class TestVerdicts(unittest.TestCase):
         self.assertEqual(ev.next_bid, 4500.00)
         self.assertEqual(ev.all_in_at_next_bid, 5692.50)
 
-    def test_no_premium_means_hold_not_bid(self):
+    def test_everyday_lot_with_no_premium_bids_at_zero_premium(self):
         parsed = parse_lot_text(read_fixture("lot_no_premium.txt"))
         ev = evaluate(parsed, model_read(parsed), URL, all_in_max=6_000.00, tax_rate=0.10)
+        self.assertEqual(ev.verdict, "BID")
+        self.assertTrue(ev.premium_absent)
+        # next bid 4,640 + 10% tax + $12.95 standard shipping, no premium
+        self.assertEqual(ev.all_in_at_next_bid, 5116.95)
+        self.assertTrue(any("Bid Review" in flag for flag in ev.risk_flags))
+        self.assertIn("Buyer's premium: none", render(ev))
+
+    def test_premium_mentioned_without_a_rate_holds(self):
+        parsed = parse_lot_text(read_fixture("lot_no_premium.txt"))
+        parsed["premium_absent"] = False
+        ev = evaluate(parsed, model_read(parsed), URL, all_in_max=6_000.00, tax_rate=0.10)
         self.assertEqual(ev.verdict, "HOLD_FOR_HUMAN")
-        self.assertIn("premium is not stated", ev.reason)
+        self.assertIn("no rate could be read", ev.reason)
         self.assertIsNone(ev.all_in_at_next_bid)
+        self.assertIsNone(ev.bid_amount)
 
     def test_math_does_not_clear(self):
         parsed = live_lot_with_premium()
@@ -243,6 +255,110 @@ class TestModelCanOnlyMakeTheAgentMoreCareful(unittest.TestCase):
         ev = self.evaluate(parsed, model_read(
             parsed, estimated_value_usd={"low": 5_500, "high": 7_000}))
         self.assertEqual(ev.verdict, "BID")
+
+
+class TestBidPlan(unittest.TestCase):
+    """A BID comes with what to enter on the site. Rates here: 15% premium,
+    10% tax, so all-in = hammer * 1.265 (+ shipping)."""
+
+    def evaluate(self, parsed, all_in_max=6_000.00, **kwargs):
+        read = kwargs.pop("read", None) or model_read(parsed)
+        return evaluate(parsed, read, URL, all_in_max=all_in_max, tax_rate=0.10,
+                        pickup_cost_usd=0.0, **kwargs)
+
+    def test_proxy_maximum_is_the_highest_whole_dollar_inside_the_all_in_max(self):
+        ev = self.evaluate(live_lot_with_premium())
+        self.assertEqual((ev.bid_amount, ev.bid_is_proxy), (4743.00, True))
+        self.assertEqual(ev.all_in_at_bid, all_in_total(4743.00, 0.15, 0.10, 0))
+        self.assertLessEqual(ev.all_in_at_bid, 6_000.00)
+        self.assertGreater(all_in_total(4744.00, 0.15, 0.10, 0), 6_000.00)
+        self.assertIn("your all-in max", ev.bid_note)
+
+    def test_models_top_value_estimate_lowers_the_proxy_maximum(self):
+        parsed = live_lot_with_premium()
+        ev = self.evaluate(parsed, read=model_read(
+            parsed, estimated_value_usd={"low": 5_000, "high": 5_900}))
+        self.assertEqual((ev.bid_amount, ev.bid_is_proxy), (4664.00, True))
+        self.assertLessEqual(ev.all_in_at_bid, 5_900.00)
+        self.assertIn("top value estimate", ev.bid_note)
+
+    def test_spending_policy_headroom_lowers_the_proxy_maximum(self):
+        ev = self.evaluate(live_lot_with_premium(), spend_limit_usd=5_880.00)
+        self.assertEqual((ev.bid_amount, ev.bid_is_proxy), (4648.00, True))
+        self.assertLessEqual(ev.all_in_at_bid, 5_880.00)
+        self.assertIn("spending policy", ev.bid_note)
+
+    def test_reserve_lot_gets_a_plain_bid_because_a_proxy_would_bid_its_full_maximum(self):
+        parsed = parse_lot_text(read_fixture("lot_reserve.txt"))
+        ev = self.evaluate(parsed, allow_reserve_lots=True)
+        self.assertEqual(ev.verdict, "BID")
+        self.assertEqual((ev.bid_amount, ev.bid_is_proxy), (4500.00, False))
+        self.assertEqual(ev.all_in_at_bid, ev.all_in_at_next_bid)
+        self.assertIn("reserve is not met", ev.bid_note)
+
+    def test_plain_bid_when_the_next_bid_is_already_at_the_ceiling(self):
+        ev = self.evaluate(live_lot_with_premium(), all_in_max=5_869.60)
+        self.assertEqual((ev.bid_amount, ev.bid_is_proxy), (4640.00, False))
+        self.assertEqual(ev.all_in_at_bid, 5869.60)
+        self.assertIn("already at the ceiling", ev.bid_note)
+
+    def test_plan_says_so_when_even_the_next_bid_is_over_what_the_policy_has_left(self):
+        ev = self.evaluate(live_lot_with_premium(), spend_limit_usd=2_000.00)
+        self.assertEqual(ev.verdict, "BID")
+        self.assertEqual((ev.bid_amount, ev.bid_is_proxy), (4640.00, False))
+        self.assertEqual(ev.all_in_at_bid, 5869.60)
+        self.assertIn("is over what the spending policy has left ($2,000.00)", ev.bid_note)
+        self.assertNotIn("already at the ceiling", ev.bid_note)
+
+    def test_no_bid_plan_unless_the_verdict_is_bid(self):
+        ev = self.evaluate(live_lot_with_premium(), all_in_max=1_000.00)
+        self.assertEqual(ev.verdict, "NO_BID")
+        self.assertEqual((ev.bid_amount, ev.all_in_at_bid, ev.bid_note), (None, None, None))
+
+
+class TestValueEstimate(unittest.TestCase):
+    def evaluate(self, parsed, all_in_max, **overrides):
+        return evaluate(parsed, model_read(parsed, **overrides), URL, all_in_max=all_in_max,
+                        tax_rate=0.10, pickup_cost_usd=0.0)
+
+    def test_without_a_max_the_agent_suggests_one_and_never_bids(self):
+        # Even a wildly high estimate (say, planted in the listing text) cannot
+        # make the agent bid: only a max the buyer gave can.
+        ev = self.evaluate(live_lot_with_premium(), None,
+                           estimated_value_usd={"low": 50_000, "high": 90_000})
+        self.assertEqual(ev.verdict, "HOLD_FOR_HUMAN")
+        self.assertEqual(ev.suggested_all_in_max, 50_000.0)
+        self.assertIsNone(ev.all_in_max)
+        self.assertIsNone(ev.bid_amount)
+        self.assertIn("No all-in max was given", ev.reason)
+        self.assertIn("A max of $50,000.00", ev.reason)
+        # 50,000 / 1.265: the hammer that max would allow
+        self.assertEqual(ev.max_hammer, 39525.69)
+        self.assertIn("hammer bid up to $39,525.69", ev.reason)
+        self.assertNotIn("already past it", ev.reason)
+        self.assertIn("suggested: $50,000.00", render(ev))
+
+    def test_suggestion_says_so_when_the_price_is_already_past_it(self):
+        ev = self.evaluate(live_lot_with_premium(), None,
+                           estimated_value_usd={"low": 3_000, "high": 9_000})
+        self.assertEqual(ev.suggested_all_in_max, 3_000.0)
+        self.assertIn("lands all-in at $5,869.60, which is already past it", ev.reason)
+
+    def test_without_a_max_or_an_estimate_there_is_nothing_to_suggest(self):
+        ev = self.evaluate(live_lot_with_premium(), None)
+        self.assertEqual(ev.verdict, "HOLD_FOR_HUMAN")
+        self.assertIsNone(ev.suggested_all_in_max)
+        self.assertIn("no value estimate", ev.reason)
+        self.assertIn("All-in max: not given", render(ev))
+
+    def test_card_shows_the_estimate_its_basis_and_the_gap_to_cost(self):
+        ev = self.evaluate(live_lot_with_premium(), 6_000.00, estimated_value_usd={
+            "low": 5_500, "high": 7_000, "basis": "Similar 14k bracelets by gold weight."})
+        card = render(ev)
+        self.assertIn("Ember value estimate: $5,500.00 to $7,000.00 — "
+                      "Similar 14k bracelets by gold weight.", card)
+        # all-in at the next bid is $5,869.60
+        self.assertIn("$369.60 above the low estimate and $1,130.40 below the high estimate", card)
 
 
 if __name__ == "__main__":

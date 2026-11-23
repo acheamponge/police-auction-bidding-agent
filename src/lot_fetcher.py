@@ -13,11 +13,14 @@ Nov 23, 2026):
       skeleton, so only the dated line counts.
     - current price ("Current Price US $X")
     - buyer's premium ("Buyer's Premium is non-refundable. NN.NN%") — the
-      rate is READ, never hardcoded. If the page prints no premium line,
-      premium_pct is None and premium_stated is False. The sources conflict
-      (PropertyRoom help: most everyday lots carry none, 10/12/15% mainly on
-      capital assets; third-party guides claim 16.5% standard) — so a missing
-      line means "unknown", never 0% and never 16.5%.
+      rate is READ, never hardcoded. PropertyRoom's help says the premium is
+      "not a charge that is on most items" and that when a lot has one "it
+      will be stated in the auction table". So there are three cases:
+        stated      a rate is printed: premium_pct is that rate
+        absent      the page never mentions a buyer's premium: there is
+                    none (premium_absent is True)
+        unreadable  the page mentions a premium but no rate could be read:
+                    unknown, and the agent holds
     - bid increment ("Bid Increment (US) $X")
     - reserve: "Reserve Not Met — Bids on this item are subject to seller
       approval." (the soft-reserve trap)
@@ -167,6 +170,7 @@ def parse_lot_text(text: str) -> dict:
     if match:
         premium_pct = float(match.group(1))
         premium_stated = True
+    premium_absent = not re.search(r"premium", lot_body(flat), re.IGNORECASE)
 
     bid_increment = _money(r"Bid Increment\s*(?:\(US\))?\s*" + _MONEY, flat)
 
@@ -182,7 +186,11 @@ def parse_lot_text(text: str) -> dict:
 
     shipping_options = []
     for method in ("Customer Pick-up", "Standard Shipping", "Expedited Shipping"):
-        pattern = re.escape(method) + r"\s*(?:\([^)]*\))?\s*(Not Available|" + _MONEY + r")"
+        # The method's cell may carry more text, e.g. "Customer Pick-up
+        # (within 5 business days) at our warehouse in Ontario, California
+        # 91761". The price cell is the next line, so the rest of the
+        # method's own line is skipped rather than searched for a number.
+        pattern = re.escape(method) + r"[^\n]*\n\s*(Not Available|" + _MONEY + r")"
         match = re.search(pattern, flat, re.IGNORECASE)
         if match:
             raw = match.group(1)
@@ -206,6 +214,7 @@ def parse_lot_text(text: str) -> dict:
         "current_price": current_price,
         "premium_pct": premium_pct,
         "premium_stated": premium_stated,
+        "premium_absent": premium_absent,
         "bid_increment": bid_increment,
         "reserve_not_met": reserve_not_met,
         "condition": condition,

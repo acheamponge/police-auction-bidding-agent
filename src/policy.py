@@ -52,6 +52,15 @@ class PolicyState:
     def exposure_usd(self) -> float:
         return round(sum(amount for _, amount in self.committed), 2)
 
+    @property
+    def headroom_usd(self) -> float:
+        """The largest all-in total the gate would still let through: the
+        per-transaction cap or what is left of the session budget, whichever
+        is smaller. A proxy bid's maximum is kept inside this."""
+        cfg = self.config
+        return max(0.0, round(min(cfg.tx_cap_usd,
+                                  cfg.session_budget_usd - self.exposure_usd), 2))
+
     def evaluate(self, verdict: str, all_in_usd: float | None,
                  lot_url: str) -> PolicyDecision:
         cfg = self.config

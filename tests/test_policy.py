@@ -50,6 +50,20 @@ class TestPolicy(unittest.TestCase):
         self.assertEqual(decision.decision, "LIVE")
 
 
+class TestHeadroom(unittest.TestCase):
+    def test_headroom_is_the_smaller_of_the_cap_and_what_the_budget_has_left(self):
+        state = PolicyState(PolicyConfig(tx_cap_usd=4_999.99, session_budget_usd=2_000.00))
+        self.assertEqual(state.headroom_usd, 2_000.00)
+        state.commit("https://example.invalid/lot-a", 1_500.00)
+        self.assertEqual(state.headroom_usd, 500.00)
+        state.commit("https://example.invalid/lot-b", 900.00)
+        self.assertEqual(state.headroom_usd, 0.0)
+
+    def test_headroom_never_exceeds_the_transaction_cap(self):
+        state = PolicyState(PolicyConfig(tx_cap_usd=4_999.99, session_budget_usd=20_000.00))
+        self.assertEqual(state.headroom_usd, 4_999.99)
+
+
 class TestCostLedger(unittest.TestCase):
     def record(self, ledger, cost_usd):
         return ledger.record(lot_url="https://example.invalid/a", model="muse-ember-1.0",

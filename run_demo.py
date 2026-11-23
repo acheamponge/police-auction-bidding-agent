@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Demo: evaluate three real PropertyRoom lots end-to-end. Evaluation only — no bids.
+"""Demo: evaluate four real PropertyRoom lots end-to-end. Evaluation only — no bids.
 
 Usage:
-    python3 run_demo.py                      # the three demo lots, fixture mode
+    python3 run_demo.py                      # the four demo lots, fixture mode
     python3 run_demo.py --live-ember         # same, but with live Muse Ember
                                               # (needs MODEL_API_KEY, in the
                                               # environment or in .env)

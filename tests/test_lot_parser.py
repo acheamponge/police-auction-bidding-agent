@@ -34,17 +34,27 @@ class TestLotParser(unittest.TestCase):
         self.assertEqual(parsed["premium_pct"], 15.00)
         self.assertEqual(parsed["current_price"], 4450.00)
 
-    def test_no_premium_line_is_unknown_not_zero(self):
-        # The core rule: a missing premium line means UNKNOWN, never 0%
-        # and never the 16.5% third-party claim. The agent must hold.
+    def test_lot_that_never_mentions_a_premium_has_none(self):
+        # PropertyRoom states a buyer's premium in the auction table when a
+        # lot has one. Most everyday lots have none and never mention it.
         parsed = parse_lot_text(read_fixture("lot_no_premium.txt"))
         self.assertEqual(parsed["status"], "live")
         self.assertIsNone(parsed["premium_pct"])
         self.assertFalse(parsed["premium_stated"])
+        self.assertTrue(parsed["premium_absent"])
         self.assertEqual(parsed["current_price"], 4620.00)
         methods = {o["method"]: o for o in parsed["shipping_options"]}
         self.assertEqual(methods["Standard Shipping"]["price_usd"], 12.95)
         self.assertEqual(methods["Expedited Shipping"]["price_usd"], 24.95)
+
+    def test_premium_mentioned_without_a_readable_rate_is_not_absent(self):
+        # e.g. the markup changed and the rate moved: that is "unknown",
+        # which must never be mistaken for "no premium".
+        text = read_fixture("lot_vehicle.txt").replace("12.00%", "see Bid Review")
+        parsed = parse_lot_text(text)
+        self.assertIsNone(parsed["premium_pct"])
+        self.assertFalse(parsed["premium_absent"])
+        self.assertFalse(parse_lot_text(read_fixture("lot_vehicle.txt"))["premium_absent"])
 
     def test_countdown_skeleton_alone_is_not_a_status(self):
         # Every page, live or ended, prints the bare words "Ending" and
@@ -81,7 +91,10 @@ class TestHtmlToText(unittest.TestCase):
         self.assertEqual(parsed["premium_pct"], 15.00)
         self.assertEqual(parsed["bid_increment"], 50.00)
         methods = {o["method"]: o for o in parsed["shipping_options"]}
+        # The pickup row carries an address and zip code before its price.
         self.assertEqual(methods["Customer Pick-up"]["price_usd"], 23.95)
+        self.assertTrue(methods["Customer Pick-up"]["available"])
+        self.assertFalse(methods["Standard Shipping"]["available"])
         self.assertFalse(methods["Expedited Shipping"]["available"])
 
 
@@ -90,7 +103,7 @@ class TestLotBody(unittest.TestCase):
         body = lot_body(html_to_text(read_fixture("lot_page.html")))
         self.assertTrue(body.startswith("2007 Toyota Prius (Jamaica, NY 11430)\nListing ID: 18690397"))
         self.assertNotIn("Sign Out", body)
-        self.assertIn("Customer Pick-up\n$23.95", body)
+        self.assertIn("New York 11430\n$23.95", body)
 
     def test_is_capped(self):
         long_text = "nav\nTitle\nListing ID: 1\n" + "x" * (LOT_BODY_LIMIT_CHARS * 2)

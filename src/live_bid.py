@@ -34,17 +34,27 @@ class LiveBiddingNotConfigured(RuntimeError):
 class BidRequest:
     lot_url: str
     listing_id: str | None
-    bid_amount_usd: float
-    all_in_usd: float
+    bid_amount_usd: float      # a proxy maximum when is_proxy, else the bid itself
+    is_proxy: bool
+    opening_bid_usd: float     # the lowest bid that takes the lead right now
+    all_in_usd: float          # the most this bid can cost, all-in
     delivery_method: str | None
 
     def describe(self) -> str:
+        if self.is_proxy:
+            bid_lines = (
+                f"  proxy bid, maximum: ${self.bid_amount_usd:,.2f}\n"
+                f"  bids now: ${self.opening_bid_usd:,.2f} (the lowest amount that leads)\n"
+                f"  all-in at most: ${self.all_in_usd:,.2f}\n")
+        else:
+            bid_lines = (
+                f"  hammer bid: ${self.bid_amount_usd:,.2f}\n"
+                f"  all-in at that bid: ${self.all_in_usd:,.2f}\n")
         return (
             f"Bid request (NOT SENT):\n"
             f"  lot: {self.lot_url}\n"
             f"  listing id: {self.listing_id or 'unknown'}\n"
-            f"  hammer bid: ${self.bid_amount_usd:,.2f}\n"
-            f"  all-in at that bid: ${self.all_in_usd:,.2f}\n"
+            + bid_lines +
             f"  delivery: {self.delivery_method or 'not chosen'}"
         )
 
@@ -53,8 +63,10 @@ def build_bid_request(evaluation, lot_url: str, listing_id: str | None = None) -
     return BidRequest(
         lot_url=lot_url,
         listing_id=listing_id,
-        bid_amount_usd=evaluation.next_bid,
-        all_in_usd=evaluation.all_in_at_next_bid,
+        bid_amount_usd=evaluation.bid_amount,
+        is_proxy=evaluation.bid_is_proxy,
+        opening_bid_usd=evaluation.next_bid,
+        all_in_usd=evaluation.all_in_at_bid,
         delivery_method=evaluation.shipping_method,
     )
 

@@ -10,7 +10,10 @@ pass --lot <url> to evaluate any other lot, including a live one.
 2. 2014 Chevrolet Caprice (Hermitage, PA) — 15% premium, RESERVE NOT MET,
    $4,450 final, $50 increment. The soft-reserve trap, live in the data.
 3. 2007 Toyota Prius (Jamaica, NY) — 15% premium, $800 final, $50
-   increment. Everyday lot, low price tier.
+   increment. Low price tier, salvage certificate.
+4. Dell Latitude 7220 Rugged Extreme tablet — an everyday lot: no buyer's
+   premium in its auction table, shipped or picked up at a warehouse. Live
+   when added (Nov 23, 2026); once it ends the demo runs it as-if-live too.
 """
 
 DEMO_LOTS = [
@@ -28,5 +31,10 @@ DEMO_LOTS = [
         "url": "https://www.propertyroom.com/l/2007-toyota-prius-jamaica-ny-11430/18690397",
         "label": "2007 Toyota Prius — 15% premium, ended $800",
         "all_in_max": 1_500.00,
+    },
+    {
+        "url": "https://www.propertyroom.com/l/dell-latitude-7220-rugged-extreme-tablet-pc/19039212",
+        "label": "Dell Latitude 7220 Rugged Extreme tablet — everyday lot, no buyer's premium",
+        "all_in_max": 400.00,
     },
 ]

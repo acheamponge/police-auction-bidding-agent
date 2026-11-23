@@ -1,6 +1,6 @@
 # Police Auction Bidding Agent — built on Muse Ember
 
-**Built entirely with Muse on iPhone** — designed, coded, tested, and demoed from the Muse iPhone app.
+**Built with Muse on iPhone** — designed, coded, tested, and demoed from the Muse iPhone app.
 
 An agent that bids on PropertyRoom police auctions without ever bidding
 blind. It evaluates a lot, reads the buyer's premium, tax, and shipping
@@ -18,12 +18,13 @@ Solo, virtual, US-only. $5,000 in prizes.
 PropertyRoom sells seized and surplus goods as-is, and its fees are a trap
 for anyone who bids on the hammer price alone:
 
-- **The buyer's premium varies per lot** and the sources conflict.
-  PropertyRoom's own help says most everyday lots carry none, with 10% /
-  12% / 15% mainly on capital assets; third-party guides claim a 16.5%
-  standard. The agent never hardcodes a rate — it reads the premium off
-  each lot's own page, and if the page states none, the all-in total is
-  *unknown* and the agent holds for a human instead of bidding blind.
+- **The buyer's premium varies per lot.** PropertyRoom's help says it is
+  "not a charge that is on most items", and that a lot with a 10%, 12% or
+  15% premium has it "stated in the auction table". Third-party guides
+  claim a 16.5% standard. The agent never hardcodes a rate. It reads the
+  premium off each lot's own page: a stated rate is used, a page that never
+  mentions a premium has none, and a page that mentions one without a
+  readable rate is held for a human.
 - **The soft reserve.** On a reserve auction the seller has one business
   day after close to accept the high bid even if the reserve was never met —
   and acceptance commits you and auto-charges you. Reserve lots are held
@@ -50,6 +51,7 @@ lot URL + all-in max
   -> deterministic math: all-in = hammer + premium + tax + shipping
      max hammer = the largest whole-cent bid whose all-in stays inside the max
   -> verdict: BID / NO_BID / HOLD_FOR_HUMAN
+  -> bid plan: the proxy maximum to set, inside every limit
   -> spending policy gate (SimCity pattern): cap, session budget, mode
   -> dry-run (default): prints the exact bid it would place. No money moves.
 ```
@@ -61,12 +63,15 @@ second pair of eyes, and its read can only make the agent more careful:
   reserve flag, status and shipping prices independently. If any of them
   differs from the parse, one of the two misread the page, and the lot is
   held for a human.
-- **Ember can veto.** Its stance covers what the numbers cannot see: does
-  the listing say it starts and runs, is there a title and a key, is damage
-  hidden behind "see images". Anything other than "bid" turns a clearing
-  bid into HOLD_FOR_HUMAN, with Ember's reasoning in the verdict.
-- **Ember prices the item.** If the all-in total is above the top of its
-  value estimate, the lot is held.
+- **Ember can veto.** Its stance covers what the numbers cannot see. For a
+  vehicle: does it start and run, is there a key and a clean title, is the
+  mileage credible. For anything else: is it for parts, is something it
+  needs missing (a charger, a battery), is it a vague mixed lot. Anything
+  other than "bid" turns a clearing bid into HOLD_FOR_HUMAN, with Ember's
+  reasoning in the verdict.
+- **Ember prices the item.** It estimates what the item would fairly sell
+  for second-hand and says what it compared it to. If the all-in total is
+  above the top of that range, the lot is held.
 
 A "bid" stance never forces a bid. Ember cannot move a NO_BID or a hold
 toward spending, so a lot page that tries to talk the model into something
@@ -74,6 +79,43 @@ gains nothing.
 
 One Ember call per lot evaluation. The model is sent the lot itself (title,
 fee table, description, shipping table), not the site navigation around it.
+
+### The bid plan
+
+PropertyRoom takes proxy bids: you set a maximum and it bids the lowest
+amount needed to lead, never more. It also extends an auction that gets a
+bid in its last minute, so bidding late gains nothing. The right move is one
+disciplined maximum, set once.
+
+When the verdict is BID the agent works out that maximum: the highest
+whole-dollar hammer price whose all-in total stays inside all three limits.
+
+- your all-in max
+- the top of Ember's value estimate
+- what the spending policy has left (the $4,999.99 cap, or the rest of the
+  session budget)
+
+The plan says which limit set the ceiling, and the policy gate judges the
+most the bid can cost, not just the next increment.
+
+One exception. When the reserve is not met, PropertyRoom bids a proxy's
+full maximum at once. On a reserve lot you have allowed, the agent places a
+plain bid at the next increment instead.
+
+### No max? It suggests one
+
+Run a lot without an all-in max and the agent does not bid. It reports
+Ember's value range, suggests the low end as a max, and shows the hammer
+price that max would allow. Only a max you give can lead to a bid, so a
+generous estimate can never spend money on its own.
+
+### Watching
+
+`watch.py` re-reads a list of lots on an interval until they end. A lot is
+only sent to Ember again when its price, status or fees changed, so a quiet
+auction costs nothing to watch. It prints the full verdict on the first look
+and whenever the verdict changes, and one line for a price move that changes
+nothing. It never bids.
 
 **Three things the lot page does not tell you, handled honestly:**
 
@@ -99,17 +141,19 @@ Muse Ember on the Meta Model API (verified Nov 23, 2026):
 $0.10 / 1M input tokens, $0.004 / 1M cached, $0.50 / 1M output
 (prompts up to 200K tokens; above that the whole request triples).
 
-One lot evaluation, measured on the live runs of Nov 23, 2026 (seven
-evaluations of four real lots):
+One lot evaluation, measured on the live runs of Nov 23, 2026 (26
+evaluations of seven real lots):
 
 | | tokens | cost |
 |---|---|---|
-| input (instructions + the lot's page text) | 4,062 to 5,716 | $0.00041 to $0.00057 |
-| output (Ember's thinking + its JSON reply) | 573 to 882 | $0.00029 to $0.00044 |
-| **per evaluation** | | **$0.0007 to $0.00095** |
+| input (instructions + the lot's page text) | 2,355 to 5,808 | $0.00024 to $0.00058 |
+| output (Ember's thinking + its JSON reply) | 573 to 1,035 | $0.00029 to $0.00052 |
+| **per evaluation** | | **$0.0004 to $0.00096, average $0.0008** |
 
-**$10 buys roughly 12,000 evaluations.** A full auction watch — say 200
-lots a day for the 10-day build window — is about $1.65.
+**$10 buys roughly 12,500 evaluations.** A full auction watch — say 200
+lots a day for the 10-day build window — is about $1.60 even if every lot
+changed on every check, and less in practice because unchanged lots are
+not re-sent.
 
 Muse Ember is a reasoning model: its thinking is billed as output and
 counts against the output cap. The client asks for `reasoning_effort: low`
@@ -123,9 +167,9 @@ output cap) and refuses to send anything that could push spend over $10.
 After the call, what it really cost is always written to
 `cost_ledger.jsonl` with tokens and the running total.
 
-Ledger after the runs below: 27 calls, 21 of them live, **$0.0154 spent,
-$9.98 left**. That total includes three early calls that came back empty
-because of the 1,200-token cap, and five tiny calls that checked which
+Ledger after the runs below: 40 calls, 34 of them live, **$0.0251 spent,
+$9.97 left**. That total includes four early calls that came back empty
+because of the 1,200-token cap, and four tiny calls that checked which
 settings the API accepts.
 
 ## Demo results
@@ -133,38 +177,51 @@ settings the API accepts.
 Run Nov 23, 2026 on live Muse Ember, against real lot pages fetched at run
 time. Assumptions: 10% tax, $0 pickup cost (a local buyer).
 
-`python3 run_demo.py --live-ember` evaluates three real lots, each twice:
-as listed, and "as-if-live" (the "Ended" line rewritten to "Ends", fee data
-untouched) so the paths past "auction ended" are exercised.
+`python3 run_demo.py --live-ember` evaluates four real lots. The three that
+have ended are each run twice: as listed, and "as-if-live" (the "Ended" line
+rewritten to "Ends", fee data untouched) so the paths past "auction ended"
+are exercised.
 
 | Lot | Premium (read) | Next bid -> all-in | As listed | As-if-live | What Ember saw |
 |---|---|---|---|---|---|
-| 2019 Ford F-150, ended $10,850, max $13,500 | 12% | $10,900 -> $13,428.80 | NO_BID (ended) | **HOLD_FOR_HUMAN** — math clears, Ember objects | Does not start or run, odometer reads 999,999, check engine light. Worth $8,000 to $12,000 |
-| 2014 Chevrolet Caprice, ended $4,450, max $6,000 | 15% | $4,500 -> $5,716.45 | NO_BID (ended) | **HOLD_FOR_HUMAN** — reserve not met (soft-reserve trap) | Starts and runs, key, regular title: stance "bid". Worth $4,500 to $7,500 |
-| 2007 Toyota Prius, ended $800, max $1,500 | 15% | $850 -> $1,099.20 | NO_BID (ended) | **HOLD_FOR_HUMAN** — math clears, Ember objects | Salvage certificate only; start/run, key and mileage all unknown. Worth $500 to $1,500 |
+| 2019 Ford F-150, ended $10,850, max $13,500 | 12% | $10,900 -> $13,428.80 | NO_BID (ended) | **HOLD_FOR_HUMAN** — math clears, Ember objects | Does not start or run, odometer not credible. Worth $7,000 to $11,000 |
+| 2014 Chevrolet Caprice, ended $4,450, max $6,000 | 15% | $4,500 -> $5,716.45 | NO_BID (ended) | **HOLD_FOR_HUMAN** — reserve not met (soft-reserve trap) | Starts and runs, key, regular title: stance "bid". Worth $5,000 to $8,000 |
+| 2007 Toyota Prius, ended $800, max $1,500 | 15% | $850 -> $1,099.20 | NO_BID (ended) | **HOLD_FOR_HUMAN** — math clears, Ember objects | Salvage title; start/run, key and mileage all unknown. Worth $400 to $1,200 |
+| Dell Latitude 7220 tablet, live at $181, max $400 | none | $184 -> $214.35 | **HOLD_FOR_HUMAN** — math clears, Ember objects | (still live) | Powers on, but no power adapter and no Windows key. Worth $200 to $350 |
 
-One lot that was really live at the time, through
-`python3 evaluate.py --lot ... --max 5000 --tax-rate 0.10 --pickup-cost 0`:
+A vehicle that was really live at the time, through `evaluate.py` with a
+$5,000 max:
 
-| Lot | Premium (read) | Next bid -> all-in | Verdict | Policy gate | What Ember saw |
-|---|---|---|---|---|---|
-| 2019 Chevrolet Cruze LS, live at $3,750 | 12% | $3,800 -> $4,681.60 | **BID** — math clears, both reads agree, no objection | **DENIED** — $4,681.60 is over the $2,000 session budget | Starts and runs, key, regular title, 123,847 miles; must be towed off the lot. Worth $4,000 to $6,500 |
+| Session budget | Verdict | Bid plan | Policy gate |
+|---|---|---|---|
+| $2,000 (default) | **BID** — next bid $3,800 lands all-in at $4,681.60; both reads agree; Ember's stance is "bid" (starts and runs, key, regular title; worth $4,500 to $6,500) | No room for a proxy: the next bid is already over what the policy has left | **DENIED** — over the session budget |
+| $5,000 (set in `config.json`) | **BID**, same reasons | **Proxy bid, maximum $4,058**; bids $3,800 now; all-in at most $4,999.46, the ceiling set by the $4,999.99 card cap | **DRY_RUN** — prints the bid request and stops |
 
-In all seven evaluations Ember's own read of the page matched the parser on
+Everyday lots, which print no buyer's premium:
+
+| Lot | Run | Result |
+|---|---|---|
+| Sealed DVD box set, live at $1.99, max $40 | `watch.py` | Stance "bid", next bid lands all-in at $23.48 (shipping is $17.99 of it), but Ember values it at $5 to $12: **HOLD_FOR_HUMAN**, all-in above the top value estimate |
+| Skullcandy headphones, live at $19, no max | `evaluate.py` | **No bid without a max.** Ember values them at $25 to $50 and suggests a $25 max, which the next bid's $41.15 all-in is already past |
+
+`watch.py` ran over three live lots for two rounds: three evaluations on the
+first round, none on the second because nothing had moved.
+
+In all 26 evaluations Ember's own read of the page matched the parser on
 every money field. Its value estimates move a little from run to run.
 
 The Prius is the case for the second read. On the numbers alone it is a
 clean bid at $1,099.20 all-in, and with no model in the loop
-(`python3 run_demo.py`, fixture mode) the agent prints exactly that bid.
-The listing's own text says salvage certificate, key unknown, running
-condition unknown.
+(`python3 run_demo.py`, fixture mode) the agent prints a bid for it.
+The listing's own text says salvage title, key unknown, running condition
+unknown.
 
 No bids were placed. No money moved.
 
 ## Run it
 
 ```bash
-# Demo: three real lots, end to end, evaluation only (fixture mode, $0)
+# Demo: four real lots, end to end, evaluation only (fixture mode, $0)
 python3 run_demo.py
 
 # Same demo on the real model
@@ -174,7 +231,13 @@ python3 run_demo.py --live-ember
 python3 evaluate.py --lot https://www.propertyroom.com/l/.../12345678 \
   --max 1500 --tax-rate 0.10 --pickup-cost 0
 
-# Tests (68, no network, no API key)
+# No max: get a suggested max from Ember's value estimate, no bid
+python3 evaluate.py --lot https://www.propertyroom.com/l/.../12345678 --tax-rate 0.10
+
+# Watch lots until they end (copy watchlist.example.json to watchlist.json)
+python3 watch.py --watchlist watchlist.json --interval 300
+
+# Tests (99, no network, no API key)
 python3 -m unittest discover -s tests
 ```
 
@@ -184,17 +247,18 @@ Python 3.10+, standard library only — no `pip install` needed.
 
 Copy `config.example.json` to `config.json` to set your tax rate, pickup
 cost, shipping preference, default all-in max and policy limits once.
-`evaluate.py` reads it, and any flag on the command line wins over it.
-`config.json` is git-ignored.
+`evaluate.py` and `watch.py` read it, and any flag on the command line wins
+over it. `config.json` and `watchlist.json` are git-ignored.
 
 ### Live Muse Ember
 
-Copy `.env.example` to `.env` and put your key in `MODEL_API_KEY`. Both
+Copy `.env.example` to `.env` and put your key in `MODEL_API_KEY`. The
 scripts read `.env` on their own; a variable already set in your shell wins
 over the file. `.env` is git-ignored.
 
-`evaluate.py` uses the real model whenever a key is present. `run_demo.py`
-only does when you pass `--live-ember`, so the plain demo never spends.
+`evaluate.py` and `watch.py` use the real model whenever a key is present.
+`run_demo.py` only does when you pass `--live-ember`, so the plain demo
+never spends.
 
 **Without a key the agent runs in fixture mode** (the SimCity pattern): a
 deterministic local evaluator returns the same JSON schema Ember would,
@@ -206,13 +270,16 @@ itself, so it always agrees and gives no value estimate.
 
 - **Dry-run is the default.** The agent prints the exact bid it would
   place and stops. A bid needs `--live --confirm` on the command line.
-- **When unsure, it holds.** Unknown auction status, no premium line, no
-  tax rate, no usable delivery method, a soft reserve, two reads that
+- **No max, no bid.** Only an all-in max you give can lead to a bid. A
+  value estimate can lower a bid's ceiling, never raise it past your max.
+- **When unsure, it holds.** Unknown auction status, an unreadable premium,
+  no tax rate, no usable delivery method, a soft reserve, two reads that
   disagree, or an objection from Ember all end in HOLD_FOR_HUMAN.
 - **Policy gate, in order:** a NO_BID/HOLD verdict never spends; an
   all-in over the $4,999.99 transaction cap is denied outright (at $5,000+
   only a wire works, and the agent never wires money); committed exposure
   plus the new all-in may not exceed the session budget ($2,000 default).
+  A proxy bid is judged at its maximum.
 - **Live bidding is not configured.** `live_bid.py` refuses every live
   attempt until an account is configured, and the bid-placement transport
   itself is intentionally not wired up (it needs an authenticated session
@@ -222,19 +289,21 @@ itself, so it always agrees and gives no value estimate.
 
 | Path | What it is |
 |---|---|
-| `run_demo.py` | Demo: 3 real lots, as-listed + as-if-live, ledger summary |
-| `evaluate.py` | CLI: evaluate one lot (`--lot URL --max N [--tax-rate R] [--pickup-cost C]`) |
+| `run_demo.py` | Demo: 4 real lots, as-listed + as-if-live, ledger summary |
+| `evaluate.py` | CLI: evaluate one lot (`--lot URL [--max N] [--tax-rate R] [--pickup-cost C]`) |
+| `watch.py` | CLI: watch lots until they end (`--watchlist FILE` or `--lot URL --max N`) |
 | `src/agent.py` | Orchestration: fetch -> Ember -> math -> policy gate |
 | `src/ember_client.py` | Muse Ember client (OpenAI-compatible), pricing, pre-call budget check, fixture mode |
 | `src/cost_ledger.py` | JSONL ledger of every model call + $10 budget wall |
 | `src/lot_fetcher.py` | Fetch + parse a lot page (premium read, never hardcoded) |
-| `src/evaluator.py` | All-in math, max hammer, the two-read check, verdicts, risk flags |
+| `src/evaluator.py` | All-in math, max hammer, the two-read check, verdicts, the bid plan |
 | `src/policy.py` | Spending policy gate (SimCity pattern, adapted) |
 | `src/live_bid.py` | Gated live-bid path — refuses without config + confirm |
-| `src/config.py` | Loads `.env` and `config.json` |
-| `src/demo_lots.py` | The three demo lots |
-| `tests/` + `tests/fixtures/` | 68 unit tests; fixtures mirror the layout of real lot pages |
-| `config.example.json` / `.env.example` | Config + key templates (copy, never commit secrets) |
+| `src/watcher.py` | The watch loop: re-evaluates a lot only when it changed |
+| `src/config.py` / `src/cli.py` | Loads `.env` and `config.json`; flags shared by the scripts |
+| `src/demo_lots.py` | The four demo lots |
+| `tests/` + `tests/fixtures/` | 99 unit tests; fixtures mirror the layout of real lot pages |
+| `config.example.json` / `watchlist.example.json` / `.env.example` | Templates (copy, never commit secrets) |
 | `cost_ledger.jsonl` | Ledger from the demo runs |
 
 ## Not built yet
@@ -242,10 +311,11 @@ itself, so it always agrees and gives no value estimate.
 - **Placing a bid.** The agent stops at the exact bid request. The
   transport needs a registered PropertyRoom account with a payment method
   on file, and a person reviewing the first requests.
-- **Watching a lot.** Each run evaluates a lot once, at its current price.
-  There is no polling as the price moves and no proxy-bid or late-bid
-  strategy.
-- **Everyday lots.** Most small lots print no buyer's premium line at all.
-  The agent treats a missing line as unknown and holds, so today it only
-  reaches BID on lots that state their premium, which are mostly vehicles
-  and other capital assets.
+- **Acting from a watch.** `watch.py` reports; it does not place or raise
+  bids, and it keeps nothing between runs.
+- **Market data.** The value estimate is Ember's judgment from the listing
+  text alone. It is not checked against sold prices, and Ember cannot see
+  the photos.
+- **Opening bids.** The next bid is always read as current price plus one
+  increment, which is one increment high on a lot with no bids yet. A proxy
+  bid is not affected.
