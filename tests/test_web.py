@@ -657,6 +657,105 @@ class TestHosted(WebTestCase):
         self.assertEqual(live.lots, [])
 
 
+class TestVercelEntryPoint(unittest.TestCase):
+    """api/index.py is what Vercel builds and runs."""
+
+    ENTRY = os.path.join(PROJECT, "api", "index.py")
+
+    def test_handler_is_declared_the_way_vercels_build_requires(self):
+        # Vercel reads the file, it does not import it. A build fails with
+        # PYTHON_ENTRYPOINT_NOT_FOUND unless it finds this exact declaration;
+        # `handler = make_handler(...)` is not enough.
+        import ast
+        with open(self.ENTRY, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        classes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
+        self.assertEqual([node.name for node in classes], ["handler"])
+        self.assertEqual([base.id for base in classes[0].bases], ["BaseHTTPRequestHandler"])
+        methods = [node.name for node in classes[0].body if isinstance(node, ast.FunctionDef)]
+        self.assertEqual(methods, ["do_GET", "do_POST"])
+
+    def test_vercel_config_matches_what_the_function_needs(self):
+        with open(os.path.join(PROJECT, "vercel.json"), encoding="utf-8") as fh:
+            config = json.load(fh)
+        # Only public/ is served as static files; never the repo root.
+        self.assertEqual(config["outputDirectory"], "public")
+        self.assertTrue(os.path.isfile(os.path.join(PROJECT, "public", "style.css")))
+        # Every path goes to the function, with the asked-for path as ?p=.
+        self.assertEqual(config["rewrites"], [{"source": "/(.*)", "destination": "/api/index?p=$1"}])
+        function = config["functions"]["api/index.py"]
+        self.assertLessEqual(function["maxDuration"], 300)
+        # The function reads these at run time. Vercel leaves public/ out of
+        # a function's files unless it is listed.
+        for needed in ("src/**", "web/**", "public/**", "README.md"):
+            self.assertIn(needed, function["includeFiles"])
+
+    def test_a_missing_asset_is_a_plain_404_not_a_crash(self):
+        import shutil
+        import tempfile
+        with tempfile.TemporaryDirectory() as bare:
+            shutil.copytree(os.path.join(PROJECT, "web"), os.path.join(bare, "web"))
+            ledger = CostLedger(os.path.join(bare, "ledger.jsonl"))
+            app = WebApp(BiddingAgent(ledger=ledger, ember=EmberClient(ledger=ledger, api_key="")),
+                         None, hosted=True)
+            status, _, payload = app.dispatch("GET", "/style.css", {"host": "x"}, b"", None, bare)
+            self.assertEqual((status, json.loads(payload)), (404, {"error": "Not found."}))
+            self.assertEqual(app.dispatch("GET", "/lots", {"host": "x"}, b"", None, bare)[0], 200)
+
+    def request(self, method, path, body=None, host="demo.example.app"):
+        """Run one request through the real entry class, with no socket."""
+        import email
+        import importlib.util
+        import io
+        from unittest import mock
+        spec = importlib.util.spec_from_file_location("vercel_entry", self.ENTRY)
+        entry = importlib.util.module_from_spec(spec)
+        with mock.patch.object(sys, "path", list(sys.path)):
+            spec.loader.exec_module(entry)
+        raw = json.dumps(body).encode("utf-8") if body is not None else b""
+        request = entry.handler.__new__(entry.handler)
+        request.rfile, request.wfile = io.BytesIO(raw), io.BytesIO()
+        request.headers = email.message_from_string(
+            f"Host: {host}\r\nContent-Type: application/json\r\nContent-Length: {len(raw)}\r\n\r\n")
+        request.path, request.command = path, method
+        request.request_version, request.requestline = "HTTP/1.1", f"{method} {path} HTTP/1.1"
+        request.client_address, request.close_connection = ("127.0.0.1", 0), True
+        request.log_message = lambda *args: None
+        with mock.patch.dict(os.environ, {}, clear=True):      # no key: fixture mode
+            getattr(request, "do_" + method)()
+        head, _, payload = request.wfile.getvalue().partition(b"\r\n\r\n")
+        return int(head.split()[1]), head.decode("latin-1"), payload
+
+    def test_a_page_comes_back_for_the_path_vercel_passes_along(self):
+        status, head, payload = self.request("GET", "/api/index?p=demo")
+        self.assertEqual(status, 200)
+        self.assertIn("Content-Type: text/html; charset=utf-8", head)
+        self.assertIn("Content-Security-Policy: default-src 'self'", head)
+        self.assertIn(b'<body data-page="demo" data-hosted="true">', payload)
+        # The home page arrives as an empty ?p=, and a plain path works too.
+        self.assertIn(b'data-page="overview"', self.request("GET", "/api/index?p=")[2])
+        self.assertIn(b'data-page="lots"', self.request("GET", "/lots")[2])
+
+    def test_the_api_answers_with_state_and_a_session_and_keeps_nothing(self):
+        status, _, payload = self.request("POST", "/api/index?p=api/state", {"session": {
+            "version": 1, "lots": [{"url": LOT, "all_in_max": 1500}]}})
+        reply = json.loads(payload)
+        self.assertEqual(status, 200)
+        self.assertTrue(reply["hosted"])
+        self.assertEqual(reply["mode"], "fixture")
+        self.assertEqual([lot["url"] for lot in reply["lots"]], [LOT])
+        self.assertEqual(reply["session"]["lots"][0]["all_in_max"], 1500.0)
+        # The next request, with no session, starts empty.
+        self.assertEqual(json.loads(self.request("POST", "/api/index?p=api/state", {})[2])["lots"], [])
+
+    def test_unknown_paths_and_oversized_bodies_are_refused_cleanly(self):
+        self.assertEqual(self.request("GET", "/api/index?p=src/web.py")[0], 404)
+        self.assertEqual(self.request("GET", "/api/index?p=.env")[0], 404)
+        big = {"session": {"version": 1, "pad": "x" * 900_000}}
+        status, _, payload = self.request("POST", "/api/index?p=api/state", big)
+        self.assertEqual((status, json.loads(payload)["error"]), (413, "Request too large."))
+
+
 class TestMiniMarkdown(unittest.TestCase):
     def test_section_is_cut_at_the_next_second_level_heading(self):
         text = "# T\n\n## One\nalpha\n\n### Sub\nbeta\n\n## Two\ngamma\n"

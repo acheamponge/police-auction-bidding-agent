@@ -296,7 +296,7 @@ python3 evaluate.py --lot https://www.propertyroom.com/l/.../12345678 --tax-rate
 # Watch lots until they end (copy watchlist.example.json to watchlist.json)
 python3 watch.py --watchlist watchlist.json --interval 300
 
-# Tests (167, no network, no API key)
+# Tests (173, no network, no API key)
 python3 -m unittest discover -s tests
 ```
 
@@ -366,7 +366,7 @@ itself, so it always agrees and gives no value estimate.
 | `web/` / `public/` | The UI: one shell and a fragment per page in `web/`; the stylesheet, the script and the recording of a PropertyRoom lot page in `public/` |
 | `src/config.py` / `src/cli.py` | Loads `.env` and `config.json`; flags shared by the scripts |
 | `src/demo_lots.py` | The four demo lots |
-| `tests/` + `tests/fixtures/` | 167 unit tests; fixtures mirror the layout of real lot pages |
+| `tests/` + `tests/fixtures/` | 173 unit tests; fixtures mirror the layout of real lot pages |
 | `config.example.json` / `watchlist.example.json` / `.env.example` | Templates (copy, never commit secrets) |
 | `cost_ledger.jsonl` | Ledger from the demo runs |
 

@@ -557,8 +557,13 @@ class WebApp:
                         render_page(project_dir, name, title, self.hosted))
             if path in ASSETS:
                 name, content_type = ASSETS[path]
-                with open(os.path.join(project_dir, "public", name), "rb") as fh:
-                    return 200, content_type, fh.read()
+                try:
+                    with open(os.path.join(project_dir, "public", name), "rb") as fh:
+                        return 200, content_type, fh.read()
+                except FileNotFoundError:
+                    # Hosted, Vercel serves public/ itself and may not hand
+                    # the function a copy of it.
+                    return self._json(404, {"error": "Not found."})
             if path == "/api/state":
                 with self.lock:
                     return self._json(200, self.state())
@@ -684,29 +689,33 @@ def requested_path(raw_path: str) -> str:
     return parts.path
 
 
-def make_hosted_handler(project_dir: str, build_app=hosted_app):
-    """The handler Vercel runs (and `ui.py --hosted`): a new app per request,
-    filled from the visitor's session, so nothing is shared between visitors
-    and nothing depends on which instance answers."""
-    class Handler(BaseHTTPRequestHandler):
-        def _answer(self, method: str) -> None:
-            body = _read_body(self, HOSTED_MAX_BODY_BYTES)
-            if body is None:
-                _send(self, *WebApp._json(413, {"error": "Request too large."}))
-                return
-            headers = {name.lower(): value for name, value in self.headers.items()}
-            try:
-                reply = build_app().dispatch(method, requested_path(self.path), headers,
-                                             body, None, project_dir)
-            except Exception:  # noqa: BLE001 — a visitor must never see a traceback
-                reply = WebApp._json(500, {"error": "Something went wrong on the server. Try again."})
-            _send(self, *reply)
+def answer_hosted(request: BaseHTTPRequestHandler, method: str, project_dir: str,
+                  build_app=hosted_app) -> None:
+    """Answer one hosted request: a new app, filled from the visitor's
+    session, so nothing is shared between visitors and nothing depends on
+    which instance answers. Used by the Vercel entry point (api/index.py)
+    and by `ui.py --hosted`."""
+    body = _read_body(request, HOSTED_MAX_BODY_BYTES)
+    if body is None:
+        _send(request, *WebApp._json(413, {"error": "Request too large."}))
+        return
+    headers = {name.lower(): value for name, value in request.headers.items()}
+    try:
+        reply = build_app().dispatch(method, requested_path(request.path), headers,
+                                     body, None, project_dir)
+    except Exception:  # noqa: BLE001 — a visitor must never see a traceback
+        reply = WebApp._json(500, {"error": "Something went wrong on the server. Try again."})
+    _send(request, *reply)
 
+
+def make_hosted_handler(project_dir: str, build_app=hosted_app):
+    """A handler class for running the hosted mode locally (`ui.py --hosted`)."""
+    class Handler(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802 — http.server's naming
-            self._answer("GET")
+            answer_hosted(self, "GET", project_dir, build_app)
 
         def do_POST(self):  # noqa: N802
-            self._answer("POST")
+            answer_hosted(self, "POST", project_dir, build_app)
 
         def log_message(self, format, *args):  # noqa: A002 — quiet by default
             pass

@@ -6,7 +6,7 @@
   ],
   "functions": {
     "api/index.py": {
-      "includeFiles": "{src/**,web/**,README.md}",
+      "includeFiles": "{src/**,web/**,public/**,README.md}",
       "maxDuration": 60
     }
   }
