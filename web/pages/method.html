@@ -11,7 +11,7 @@
       <ol class="steps">
         <li><b>Fetch</b><span>The lot's own public PropertyRoom page. No login.</span></li>
         <li><b>Parse</b><span>Price, increment, premium, reserve, status and the delivery table, by fixed rules.</span></li>
-        <li><b>Second read</b><span>Muse Ember reads the same page on its own: the same fields, a value estimate, and a stance on the listing.</span></li>
+        <li><b>Second read</b><span>Muse Ember reads the same page on its own: the same fields, a value estimate, and a stance on the listing. It also reads the lot's own photos — up to six, sent with the text.</span></li>
         <li><b>Math</b><span>All-in = hammer + premium + tax + delivery. The max hammer is the largest whole-cent bid that stays inside your max.</span></li>
         <li><b>Verdict</b><span>BID, NO BID, or HOLD FOR YOU.</span></li>
         <li><b>Bid plan</b><span>The proxy maximum to set, inside every limit.</span></li>
@@ -19,7 +19,7 @@
       </ol>
     </section>
 
-    <div class="grid-3">
+    <div class="grid-2">
       <section class="card pad card-accent">
         <h3>Two reads must agree</h3>
         <p>Ember extracts the price, premium, increment, reserve flag, status and delivery prices independently. If any differs from the parse, one of the two misread the page, and the lot is held.</p>
@@ -27,6 +27,10 @@
       <section class="card pad card-accent">
         <h3>Ember can veto</h3>
         <p>Its stance covers what the numbers cannot see. For a vehicle: does it start and run, is there a key and a clean title, is the mileage credible. For anything else: is it for parts, is a charger or battery missing, is it a vague mixed lot. Boilerplate like "sold as-is" is not a reason on its own.</p>
+      </section>
+      <section class="card pad card-accent">
+        <h3>Ember reads the photos</h3>
+        <p>The lot's own photos go to the model with the text, up to six. The listing's damage fields often say only "SEE VEHICLE IMAGES" — the photos are the damage report. A photo finding can veto a bid exactly like a text one: the 2015 Chevrolet Impala in the demo says it starts and runs, but its windshield photo says it needs a jump start and leaks coolant, so it is held.</p>
       </section>
       <section class="card pad card-accent">
         <h3>Ember prices the item</h3>
@@ -62,13 +66,14 @@
           <li>The reserve is not met and reserve lots are not allowed.</li>
           <li>The two reads of the page disagree.</li>
           <li>Ember's stance is not "bid", or the all-in is above its top value estimate.</li>
+          <li>What the photos show contradicts the text, or shows a problem the text does not.</li>
         </ul>
       </section>
       <section class="card pad">
         <h2 class="card-title">Not built yet</h2>
         <ul class="plain">
           <li><b>Placing a bid.</b> The agent stops at the exact bid request. That needs a registered PropertyRoom account and a person reviewing the first requests.</li>
-          <li><b>Market data.</b> The value estimate is Ember's judgment from the listing text alone. It is not checked against sold prices, and Ember cannot see the photos.</li>
+          <li><b>Market data.</b> The value estimate is Ember's judgment from the listing (text and photos). It is not checked against sold prices.</li>
           <li><b>Opening bids.</b> The next bid is read as current price plus one increment, which is one increment high on a lot with no bids yet. A proxy bid is not affected.</li>
         </ul>
       </section>

@@ -20,6 +20,12 @@ pass --lot <url> to evaluate any other lot, including a live one.
    Muse Ember's stance "bid" with a $10–$25 value estimate — BID, proxy
    maximum $9.00, all-in at most $24.85 (DRY_RUN). The demo's other lots
    all hold, so without this one a visitor never sees a bid plan.
+6. 2015 Chevrolet Impala (Hartford, CT) — 12% premium, $2,850, no reserve,
+   live when added (Nov 24, 2026; ends Nov 25, 5:08 PM ET). The photo case:
+   the page text says it starts and runs, but the windshield photo carries
+   handwritten yard notes — "Requirg Jump" and "Coolant leak" — that appear
+   nowhere in the text. On text alone Ember split (one run "bid", one "hold");
+   the photos settle it: HOLD_FOR_HUMAN, with the photo notes quoted.
 """
 
 DEMO_LOTS = [
@@ -48,4 +54,23 @@ DEMO_LOTS = [
         "label": "50-ft 2\" reflective trailer tape — brand new, no buyer's premium",
         "all_in_max": 30.00,
     },
+    {
+        "url": "https://www.propertyroom.com/l/2015-chevrolet-impala/19035234",
+        "label": "2015 Chevrolet Impala — the photo case: the text says it runs, the windshield says it needs a jump start and leaks coolant",
+        "all_in_max": 4_500.00,
+    },
 ]
+
+
+def demo_config_version(lots=None) -> str:
+    """A fingerprint of the fixed demo lots (URLs, labels, all-in maxes).
+    When the lots change, a stored demo run from the old list is stale and
+    must not be shown — the visitor runs the demo fresh against the new list."""
+    import hashlib
+    import json
+
+    payload = [{"url": lot["url"], "label": lot["label"],
+                "all_in_max": lot["all_in_max"]}
+               for lot in (DEMO_LOTS if lots is None else lots)]
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:12]

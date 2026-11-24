@@ -248,6 +248,21 @@ function ember(e) {
       side(e.value_estimate_high) + " the high estimate.";
   }
   const stancePill = e.ember_stance === "bid" ? "pill-plan" : e.ember_stance ? "pill-cond" : "";
+  // What the photos showed, when Muse Ember read them. The photo risks are
+  // what can veto a bid: they are already in the risk flags, but they are
+  // quoted here next to the verdict so the reason is visible.
+  const photo = e.photo_notes;
+  const photoBlock = photo ? el("div", { class: "photo-notes" },
+      el("div", { class: "eyebrow" }, "What the photos show"),
+      photo.summary && el("p", {}, photo.summary),
+      photo.matches_listing === false && el("p", { class: "photo-mismatch" }, "The photos do not match the listing."),
+      (photo.observations || []).length ? el("ul", { class: "photo-list" },
+        photo.observations.map((note) => el("li", {}, note))) : null,
+      (photo.risks || []).length ? el("ul", { class: "photo-list photo-risks" },
+        photo.risks.map((note) => el("li", {}, note))) : null)
+    : e.simulated && e.photo_urls && e.photo_urls.length ? el("p", { class: "muted" },
+      "The lot's photos were not read — fixture mode calls no model, so there is no photo read to show.")
+    : null;
   return el("div", { class: "ember" },
     el("div", { class: "ember-head" },
       el("strong", {}, e.simulated ? "LOCAL STAND-IN" : "MUSE EMBER"),
@@ -257,7 +272,8 @@ function ember(e) {
     hasValue && el("p", {},
       el("span", { class: "value" }, "Worth " + money(e.value_estimate_low) + " to " + money(e.value_estimate_high) + ". "),
       el("span", { class: "muted" }, e.value_basis || "")),
-    gap && el("p", { class: "muted" }, gap));
+    gap && el("p", { class: "muted" }, gap),
+    photoBlock);
 }
 
 function flags(e) {
@@ -330,7 +346,7 @@ function renderOverview(state) {
     const checked = state.lots.length - counts.none;
     let eyebrow = "Start here";
     let title = "No lots on your list yet";
-    let note = "Run the demo to watch five real lots go through the agent, or paste a lot link on the Lots page.";
+    let note = "Run the demo to watch six real lots go through the agent, or paste a lot link on the Lots page.";
     if (state.lots.length && !checked) {
       eyebrow = "Waiting on you";
       title = plural(counts.none, "lot") + " on your list, not checked yet";
@@ -369,6 +385,18 @@ function stepTitle(number, text) {
   return el("h2", { class: "step-title" }, el("span", { class: "step-number" }, number), text);
 }
 
+// The lot's own photos, loaded straight from PropertyRoom's image host.
+// They are image files, not pages, so nothing here is framed or copied.
+// A photo that fails to load is dropped rather than shown broken.
+function photoStrip(urls) {
+  if (!urls || !urls.length) return null;
+  return el("figure", { class: "photos" },
+    el("figcaption", {}, "The lot's own photos — the agent reads these alongside the text."),
+    el("div", { class: "photo-strip" }, urls.map((url, index) => el("img", {
+      src: url, loading: "lazy", alt: "Photo " + (index + 1) + " from the lot listing",
+      onerror: (event) => { event.target.remove(); } }))));
+}
+
 function listingView(lot) {
   const listing = lot.listing;
   const open = el("a", { class: "btn btn-sm", href: lot.url, target: "_blank", rel: "noopener noreferrer" },
@@ -396,6 +424,7 @@ function listingView(lot) {
       el("p", { class: "listing-ends" }, listing.ends_text || "The page prints no dated Ends or Ended line."),
       listing.reserve_not_met && el("p", { class: "listing-reserve" },
         "Reserve Not Met. Bids on this item are subject to seller approval."),
+      photoStrip(listing.photo_urls),
       el("dl", { class: "facts" },
         fact("Current price", money(listing.current_price)),
         fact("Bid increment", money(listing.bid_increment)),
@@ -408,7 +437,7 @@ function listingView(lot) {
         el("tbody", {}, delivery))) : null,
       el("p", { class: "fine" },
         "Read off the listing at " + new Date(lot.fetched_at).toLocaleTimeString() +
-        ". PropertyRoom does not let its pages be shown inside other sites, so this is the listing's own text. Tax is not on the page."),
+        ". PropertyRoom does not let its pages be shown inside other sites, so this is the listing's own text and photos. Tax is not on the page."),
       el("details", { class: "site-peek" },
         el("summary", {}, "What a lot page looks like on the site"),
         el("img", { src: "/propertyroom.gif", width: "680", height: "478", loading: "lazy",
@@ -470,7 +499,7 @@ function renderDemo(state) {
   $("demo-note").textContent =
     "Demo assumptions: " + (demo.tax_rate * 100).toFixed(0) + "% tax and " + money(demo.pickup_cost_usd) +
     " pickup cost on top of the page's fee (a local buyer). " +
-    (live ? "On the live model a first run makes up to nine calls, about one cent in total. Running it again costs nothing unless a page changed."
+    (live ? "On the live model a first run makes up to thirteen calls, a few cents in total. Running it again costs nothing unless a page changed."
       : "Fixture mode: no model is called, so there is no second read and no value estimate. Start the app with a key to see Muse Ember's part.");
   $("demo-run").textContent = demo.ran_at ? "Run it again" : "Run the demo";
 
@@ -494,7 +523,9 @@ function renderDemo(state) {
     return el("button", { class: "tab", type: "button", role: "tab",
         "aria-selected": String(index === demoSelected),
         onclick: () => { demoSelected = index; renderDemo(lastState); } },
-      el("span", { class: "tab-kind" }, lot.live_now ? "Live now" : "Ended lot"),
+      el("span", { class: "tab-kind" }, lot.live_now ? "Live now"
+        : ((lot.listing && lot.listing.status === "live")
+           || (lot.listed && lot.listed.evaluation.status === "live")) ? "Live lot" : "Ended lot"),
       el("span", { class: "tab-name" }, lot.label.split(" — ")[0]),
       lot.error ? el("span", { class: "pill verdict pill-nogo" }, "ERROR") : verdictPill(final));
   }));
@@ -557,6 +588,7 @@ function lotCard(lot) {
         el("h3", {}, lotLink(lot.url, e.title || lot.url)),
         el("p", { class: "lot-sub" }, lotTag(lot), " — ", statusWord(e))),
       verdictFinal(lot)),
+    photoStrip(e.photo_urls),
     resultBody(lot),
     el("div", { class: "lot-foot" }, maxForm(lot), actions));
 }

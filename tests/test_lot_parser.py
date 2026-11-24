@@ -8,7 +8,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
 from helpers import read_fixture
-from src.lot_fetcher import LOT_BODY_LIMIT_CHARS, html_to_text, lot_body, parse_lot_text
+from src.lot_fetcher import (MAX_PHOTOS, LOT_BODY_LIMIT_CHARS, extract_photo_urls, html_to_text,
+                             lot_body, parse_lot_text)
 
 
 class TestLotParser(unittest.TestCase):
@@ -113,6 +114,42 @@ class TestLotBody(unittest.TestCase):
 
     def test_page_without_a_listing_id_is_sent_from_the_top(self):
         self.assertEqual(lot_body("just some text"), "just some text")
+
+
+class TestPhotoUrls(unittest.TestCase):
+    """The lot's own photos are the damage report: the listing's damage
+    fields often say only "SEE VEHICLE IMAGES"."""
+    HTML = """
+    <html><body>
+    <script>var gallery = {"Url": "https://content.propertyroom.com/listings/origimgs/19035234_01.jpg",
+    "ThumbnailUrl": "https://content.propertyroom.com/listings/thmbimgs/19035234_01.jpg"};
+    </script>
+    <img src="https://content.propertyroom.com/listings/ttlimgs/19035234_01.jpg">
+    <img src="https://content.propertyroom.com/listings/origimgs/19035234_02.jpg">
+    <img src="https://content.propertyroom.com/listings/banners/merchant.jpg">
+    <img src="https://example.invalid/not-a-lot-photo.jpg">
+    </body></html>
+    """
+
+    def test_the_same_photo_at_three_sizes_is_kept_once_at_full_size(self):
+        self.assertEqual(extract_photo_urls(self.HTML), [
+            "https://content.propertyroom.com/listings/origimgs/19035234_01.jpg",
+            "https://content.propertyroom.com/listings/origimgs/19035234_02.jpg",
+        ])
+
+    def test_merchant_banners_and_other_hosts_are_not_photos(self):
+        urls = extract_photo_urls(self.HTML)
+        self.assertNotIn("https://content.propertyroom.com/listings/banners/merchant.jpg", urls)
+        self.assertNotIn("https://example.invalid/not-a-lot-photo.jpg", urls)
+
+    def test_a_page_with_no_photos_is_empty_not_an_error(self):
+        self.assertEqual(extract_photo_urls("<html><body>no photos here</body></html>"), [])
+
+    def test_the_count_is_capped(self):
+        html = "".join(
+            f'<img src="https://content.propertyroom.com/listings/origimgs/1_{n}.jpg">'
+            for n in range(10))
+        self.assertEqual(len(extract_photo_urls(html)), MAX_PHOTOS)
 
 
 if __name__ == "__main__":

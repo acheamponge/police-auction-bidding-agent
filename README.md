@@ -5,7 +5,7 @@
 **[Try it live](https://police-auction-bidding-agent.vercel.app)**. No sign-in, and
 nothing can be bid. Open [Demo](https://police-auction-bidding-agent.vercel.app/demo)
 and press Run the demo to watch an auction that is live on PropertyRoom right
-now, and five past lots, go through the agent on Muse Ember. Or paste a lot
+now, and six past lots, go through the agent on Muse Ember. Or paste a lot
 link of your own on [Lots](https://police-auction-bidding-agent.vercel.app/lots).
 
 An agent that bids on PropertyRoom police auctions without ever bidding
@@ -79,7 +79,10 @@ second pair of eyes, and its read can only make the agent more careful:
   mileage credible. For anything else: is it for parts, is something it
   needs missing (a charger, a battery), is it a vague mixed lot. Anything
   other than "bid" turns a clearing bid into HOLD_FOR_HUMAN, with Ember's
-  reasoning in the verdict.
+  reasoning in the verdict. **The photos can veto too:** Ember reads the
+  lot's own photos (up to six) alongside the text, and a photo finding —
+  damage the text never mentions, a part the photos do not show — holds the
+  lot exactly like a text objection.
 - **Ember prices the item.** It estimates what the item would fairly sell
   for second-hand and says what it compared it to. If the all-in total is
   above the top of that range, the lot is held.
@@ -89,7 +92,9 @@ toward spending, so a lot page that tries to talk the model into something
 gains nothing.
 
 One Ember call per lot evaluation. The model is sent the lot itself (title,
-fee table, description, shipping table), not the site navigation around it.
+fee table, description, shipping table) plus the lot's own photos, not the
+site navigation around it. The listing's damage fields often say only "SEE
+VEHICLE IMAGES" — the photos are the damage report, so the agent reads them.
 
 ### The bid plan
 
@@ -386,8 +391,7 @@ itself, so it always agrees and gives no value estimate.
 - **Acting from a watch.** `watch.py` reports; it does not place or raise
   bids, and it keeps nothing between runs.
 - **Market data.** The value estimate is Ember's judgment from the listing
-  text alone. It is not checked against sold prices, and Ember cannot see
-  the photos.
+  (text and photos). It is not checked against sold prices.
 - **Opening bids.** The next bid is always read as current price plus one
   increment, which is one increment high on a lot with no bids yet. A proxy
   bid is not affected.

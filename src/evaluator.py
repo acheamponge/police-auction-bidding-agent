@@ -90,6 +90,11 @@ class Evaluation:
     bid_is_proxy: bool = False           # True: bid_amount is a proxy maximum
     all_in_at_bid: float | None = None   # the most this bid can cost, all-in
     bid_note: str | None = None
+    # The lot's own photos, and what Muse Ember saw in them. photo_notes is
+    # None when no photos were sent (or in fixture mode, where no model reads
+    # them); its "risks" can veto a bid exactly like any other Ember objection.
+    photo_urls: list = field(default_factory=list)
+    photo_notes: dict | None = None
 
 
 def _letters(text: str) -> str:
@@ -289,6 +294,11 @@ def evaluate(parsed: dict, ember_result: dict, lot_url: str, all_in_max: float |
     value = value if isinstance(value, dict) else {}
     value_low, value_high = _number(value.get("low")), _number(value.get("high"))
     value_basis = value.get("basis") if isinstance(value.get("basis"), str) else None
+    photo_notes = ember_result.get("photo_notes")
+    photo_notes = photo_notes if isinstance(photo_notes, dict) else None
+    photo_risks = [str(risk) for risk in (photo_notes or {}).get("risks") or []]
+    for risk in photo_risks:
+        _flag(f"Photo: {risk}")
     mismatches = disagreements(parsed, ember_result)
     simulated = bool((ember_result.get("_meta") or {}).get("simulated"))
     suggested_max = value_low if all_in_max is None else None
@@ -404,6 +414,13 @@ def evaluate(parsed: dict, ember_result: dict, lot_url: str, all_in_max: float |
                            f"\"{stance or 'missing'}\""
                            + (f": {reasoning}" if reasoning else ".")
                            + " A person decides.")
+    elif photo_risks:
+        # The photos veto exactly like any other Ember objection: the model
+        # said "bid" on the text, but what it saw in the photos stops it.
+        verdict, reason = ("HOLD_FOR_HUMAN",
+                           f"The math clears (all-in ${all_in_next:,.2f}), but "
+                           f"the lot's photos show a problem the text does not: "
+                           + "; ".join(photo_risks) + ". A person decides.")
     elif value_high is not None and all_in_next > value_high:
         verdict, reason = ("HOLD_FOR_HUMAN",
                            f"The math clears, but the all-in ${all_in_next:,.2f} "
@@ -462,6 +479,8 @@ def evaluate(parsed: dict, ember_result: dict, lot_url: str, all_in_max: float |
         bid_is_proxy=bid_is_proxy,
         all_in_at_bid=all_in_at_bid,
         bid_note=bid_note,
+        photo_urls=list(parsed.get("photo_urls") or []),
+        photo_notes=photo_notes,
     )
 
 
@@ -533,4 +552,18 @@ def render(evaluation: Evaluation) -> str:
         lines.append(f"Ember stance: {e.ember_stance}"
                      + (f" — {e.ember_reasoning}" if e.ember_reasoning else "")
                      + source)
+    if e.photo_notes:
+        lines.append("Photos: "
+                     + (e.photo_notes.get("summary") or "read, nothing new")
+                     + (" — matches the listing" if e.photo_notes.get("matches_listing")
+                        else " — do NOT match the listing"
+                        if e.photo_notes.get("matches_listing") is False else ""))
+        for observation in e.photo_notes.get("observations") or []:
+            lines.append(f"  - saw: {observation}")
+        for risk in e.photo_notes.get("risks") or []:
+            lines.append(f"  - photo risk: {risk}")
+    elif e.photo_urls and e.simulated:
+        lines.append("Photos: not read — fixture mode calls no model, so the "
+                     "photos were not looked at. Start the app with a key "
+                     "to see Muse Ember's photo read.")
     return "\n".join(lines)

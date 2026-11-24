@@ -17,8 +17,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 from helpers import model_read, read_fixture
 from src.agent import BiddingAgent
 from src.cost_ledger import CostLedger
+from src.demo_lots import DEMO_LOTS, demo_config_version
 from src.ember_client import EmberClient
-from src.lot_fetcher import FetchError, html_to_text, parse_lot_text
+from src.lot_fetcher import FetchError, extract_photo_urls, html_to_text, parse_lot_text
 from src import mini_markdown
 from src.demo_lots import DEMO_LOTS
 from src.web import (HOSTED_MAX_LOTS, PAGES, BadRequest, WebApp, check_lot_url, hosted_app,
@@ -66,7 +67,8 @@ class WebTestCase(unittest.TestCase):
 
     def transport(self, url, body, headers, timeout_s):
         self.model_calls.append(body)
-        page = body["messages"][1]["content"]
+        content = body["messages"][1]["content"]
+        page = content if isinstance(content, str) else content[0]["text"]
         price = 900.00 if "US $900.00" in page else 800.00
         reply = model_read(parse_lot_text(LIVE), current_price=price,
                            estimated_value_usd={"low": 1_200, "high": 2_000, "basis": "Comparable cars."})
@@ -277,7 +279,7 @@ class TestDemoAndLedger(WebTestCase):
         app = self.app(live=False)
         before = app.state()["demo"]
         self.assertIsNone(before["ran_at"])
-        self.assertEqual([lot["listed"] for lot in before["lots"]], [None] * 4)
+        self.assertEqual([lot["listed"] for lot in before["lots"]], [None] * len(DEMO_LOTS))
         self.assertEqual((before["tax_rate"], before["pickup_cost_usd"]), (0.10, 0.0))
 
         app.run_demo()
@@ -292,7 +294,7 @@ class TestDemoAndLedger(WebTestCase):
         still_live = demo["lots"][3]
         self.assertEqual(still_live["listed"]["evaluation"]["status"], "live")
         self.assertIsNone(still_live["as_if_live"])
-        self.assertEqual(len(self.fetches), 4)
+        self.assertEqual(len(self.fetches), len(DEMO_LOTS))
 
     def test_demo_uses_its_own_assumptions_not_yours(self):
         app = self.app(live=False, tax_rate=None, pickup_cost_usd=None)   # yours would hold everything
@@ -305,7 +307,7 @@ class TestDemoAndLedger(WebTestCase):
         app = self.app()
         app.run_demo()
         first = len(self.model_calls)
-        self.assertEqual(first, 8)                    # four lots, as listed and as-if-live
+        self.assertEqual(first, 2 * len(DEMO_LOTS))   # every fixed lot, as listed and as-if-live
         app.run_demo()
         self.assertEqual(len(self.model_calls), first)
         self.pages[DEMO_LOTS[0]["url"]] = ENDED.replace("US $800.00", "US $900.00")
@@ -320,6 +322,28 @@ class TestDemoAndLedger(WebTestCase):
         self.assertIn("HTTP 503", lots[1]["error"])
         self.assertIsNone(lots[1]["listed"])
         self.assertEqual(lots[2]["as_if_live"]["evaluation"]["verdict"], "BID")
+
+    def test_the_demo_sends_a_lot_photos_to_the_model(self):
+        photo = "https://content.propertyroom.com/listings/origimgs/19035234_01.jpg"
+        self.pages[DEMO_LOTS[0]["url"]] = ENDED + "\n" + photo + "\n"
+
+        def fetch(url):
+            page = self.pages[url]
+            parsed = parse_lot_text(page)
+            parsed["photo_urls"] = extract_photo_urls(page)
+            return parsed, page
+
+        app = self.app(live=True)
+        app.fetch = fetch
+        app.run_demo(0)
+        # As listed and as-if-live: the same photos go with both reads.
+        self.assertEqual(len(self.model_calls), 2)
+        for body in self.model_calls:
+            content = body["messages"][1]["content"]
+            self.assertIsInstance(content, list)
+            self.assertEqual(content[1]["image_url"]["url"], photo)
+        entry = app.state()["demo"]["lots"][0]
+        self.assertEqual(entry["listing"]["photo_urls"], [photo])
 
     def test_state_carries_the_recent_ledger_entries_and_what_the_policy_has_left(self):
         app = self.app()
@@ -342,10 +366,10 @@ class TestDemoThreeViews(WebTestCase):
         app = self.app(live=False)
         app.run_demo()
         lots = app.state()["demo"]["lots"]
-        self.assertEqual(len(lots), 5)
+        self.assertEqual(len(lots), 1 + len(DEMO_LOTS))
         live = lots[0]
         self.assertTrue(live["live_now"])
-        self.assertEqual([lot["live_now"] for lot in lots[1:]], [False] * 4)
+        self.assertEqual([lot["live_now"] for lot in lots[1:]], [False] * len(DEMO_LOTS))
         self.assertEqual(live["url"], LOT)             # OTHER came first but has ended
         self.assertTrue(live["label"].endswith("live on PropertyRoom right now"))
         # next bid $850 costs $1,099.20 all-in; a quarter above, rounded up to $10
@@ -418,8 +442,8 @@ class TestDemoThreeViews(WebTestCase):
         app = self.app(live=False)
         app.run_demo()
         self.assertEqual(self.fetches[:5], ended[:5])          # five tries, the demo lot skipped
-        self.assertEqual(len(self.fetches), 5 + 4)
-        self.assertEqual(len(app.state()["demo"]["lots"]), 4)   # no live lot found
+        self.assertEqual(len(self.fetches), 5 + len(DEMO_LOTS))
+        self.assertEqual(len(app.state()["demo"]["lots"]), len(DEMO_LOTS))   # no live lot found
 
     def test_the_live_lot_is_kept_between_runs_until_it_ends(self):
         self.list_lots(LOT, OTHER)
@@ -442,7 +466,7 @@ class TestDemoThreeViews(WebTestCase):
         app = self.app(live=False)
         app.run_demo()
         lots = app.state()["demo"]["lots"]
-        self.assertEqual(len(lots), 4)
+        self.assertEqual(len(lots), len(DEMO_LOTS))
         self.assertEqual(lots[0]["as_if_live"]["evaluation"]["verdict"], "BID")
 
 
@@ -538,7 +562,7 @@ class TestHosted(WebTestCase):
         self.assertEqual([lot["url"] for lot in reply["lots"]], [LOT])   # one valid lot, once
         self.assertIsNone(reply["lots"][0]["evaluation"])
         self.assertIsNone(reply["lots"][0]["error"])
-        self.assertEqual(len(reply["demo"]["lots"]), 4)                  # no forged live lot
+        self.assertEqual(len(reply["demo"]["lots"]), len(DEMO_LOTS))   # no forged live lot
         self.assertEqual(reply["demo"]["lots"][0]["label"], DEMO_LOTS[0]["label"])
         self.assertEqual(reply["demo"]["lots"][0]["all_in_max"], DEMO_LOTS[0]["all_in_max"])
         self.assertIsNone(reply["demo"]["lots"][0]["listed"])
@@ -548,6 +572,22 @@ class TestHosted(WebTestCase):
                                {"url": LOT, "session": reply["session"]})
         self.assertEqual(checked["lots"][0]["evaluation"]["verdict"], "BID")
         self.assertEqual(len(self.model_calls), 1)
+
+    def test_a_demo_run_from_an_older_demo_list_is_left_behind(self):
+        _, first = self.post(self.app(hosted=True, live=False), "/api/demo/run", {"step": 0})
+        session = first["session"]
+        self.assertEqual(session["demo"]["config_version"], demo_config_version())
+        # A session stored before versioning was added has no config version.
+        del session["demo"]["config_version"]
+        _, reply = self.post(self.app(hosted=True), "/api/state", {"session": session})
+        self.assertIsNone(reply["demo"]["lots"][0]["listed"])
+        self.assertIsNone(reply["demo"]["ran_at"])
+
+    def test_a_demo_run_from_the_current_demo_list_comes_back(self):
+        _, first = self.post(self.app(hosted=True, live=False), "/api/demo/run", {"step": 0})
+        _, reply = self.post(self.app(hosted=True), "/api/state", {"session": first["session"]})
+        self.assertIsNotNone(reply["demo"]["lots"][0]["listed"])
+        self.assertEqual(reply["demo"]["ran_at"], "2026-11-23T12:00:00")
 
     def test_one_bad_setting_keeps_the_whole_set_out(self):
         good = {"tax_rate": 0.05, "pickup_cost_usd": 20, "shipping_preference": "standard"}
@@ -606,28 +646,29 @@ class TestHosted(WebTestCase):
     def test_demo_runs_one_step_per_request_and_builds_up_through_the_session(self):
         self.list_lots(LOT)
         session = None
-        for step in ("live", 0, 1, 2, 3):
+        for step in ("live", *range(len(DEMO_LOTS))):
             status, reply = self.post(self.app(hosted=True, live=False), "/api/demo/run",
                                       {"step": step, "session": session})
             self.assertEqual(status, 200)
             session = reply["session"]
         lots = reply["demo"]["lots"]
-        self.assertEqual(len(lots), 5)
+        self.assertEqual(len(lots), 1 + len(DEMO_LOTS))
         self.assertTrue(lots[0]["live_now"])
         self.assertEqual(lots[0]["url"], LOT)
         self.assertEqual(lots[0]["listed"]["evaluation"]["verdict"], "BID")
         self.assertTrue(all(lot["listed"] and lot["listing"] and lot["cli"]["output"] for lot in lots))
         self.assertEqual(lots[4]["as_if_live"]["evaluation"]["status"], "live")
-        self.assertEqual(len(self.fetches), 1 + 1 + 4)      # find the live lot, run it, run four
+        self.assertEqual(len(self.fetches), 1 + 1 + len(DEMO_LOTS))   # find the live lot, run it, run each fixed lot
         self.assertEqual(len(self.html_fetches), 1)
 
     def test_one_demo_step_touches_only_its_own_lot(self):
         app = self.app(live=False)
         app.run_demo(2)
         lots = app.state()["demo"]["lots"]
-        self.assertEqual([bool(lot["listed"]) for lot in lots], [False, False, True, False])
+        self.assertEqual([bool(lot["listed"]) for lot in lots],
+                         [False, False, True] + [False] * (len(DEMO_LOTS) - 3))
         self.assertEqual(self.html_fetches, [])             # a fixed-lot step does not go looking
-        for bad in (4, -1, "all", 1.5, True, [0]):
+        for bad in (len(DEMO_LOTS), -1, "all", 1.5, True, [0]):
             with self.subTest(step=bad):
                 with self.assertRaises(BadRequest):
                     app.run_demo(bad)

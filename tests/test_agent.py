@@ -16,7 +16,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 from helpers import model_read, read_fixture
 from src.agent import BiddingAgent, render_result
 from src.cost_ledger import BudgetExceeded, CostLedger
-from src.ember_client import EmberClient, EmberError, price_call
+from src.ember_client import (EVALUATION_SYSTEM_PROMPT, EmberClient, EmberError,
+                              price_call, worst_case_cost)
 from src.lot_fetcher import html_to_text, parse_lot_text
 from src.policy import PolicyConfig
 
@@ -119,6 +120,46 @@ class TestEmberClient(AgentTestCase):
         self.assertEqual((summary["calls"], summary["simulated_calls"]), (1, 1))
         self.assertEqual(summary["total_spent_usd"], 0.0)
 
+    def test_photos_are_sent_as_image_parts_with_the_lot_text(self):
+        ledger = self.ledger()
+        client, transport = self.live_client(ledger, json.dumps(model_read(self.parsed)))
+        photos = ["https://content.propertyroom.com/listings/origimgs/1_01.jpg",
+                  "https://content.propertyroom.com/listings/origimgs/1_02.jpg"]
+        client.evaluate_lot(self.text, URL, image_urls=photos)
+        content = transport.requests[0]["body"]["messages"][1]["content"]
+        self.assertIsInstance(content, list)
+        self.assertEqual(content[0]["type"], "text")
+        self.assertIn("Listing ID: 18690397", content[0]["text"])
+        self.assertIn("The lot's own photos follow", content[0]["text"])
+        self.assertEqual([part["type"] for part in content[1:]], ["image_url", "image_url"])
+        self.assertEqual([part["image_url"]["url"] for part in content[1:]], photos)
+
+    def test_no_photos_means_the_same_plain_text_message_as_before(self):
+        ledger = self.ledger()
+        client, transport = self.live_client(ledger, json.dumps(model_read(self.parsed)))
+        client.evaluate_lot(self.text, URL)
+        content = transport.requests[0]["body"]["messages"][1]["content"]
+        self.assertIsInstance(content, str)
+        self.assertIn("Listing ID: 18690397", content)
+
+    def test_worst_case_cost_counts_each_photo(self):
+        # Six photos at the per-image allowance add $0.0024 to the worst case.
+        self.assertAlmostEqual(worst_case_cost(3000, 6) - worst_case_cost(3000),
+                               0.0024, places=6)
+
+    def test_a_photo_call_that_could_cross_the_budget_is_never_sent(self):
+        # A budget the text-only worst case fits under, but six photos do not.
+        text_only = worst_case_cost(len(EVALUATION_SYSTEM_PROMPT) + len(self.text))
+        ledger = self.ledger(budget_usd=text_only + 0.0001)
+        client, transport = self.live_client(ledger, json.dumps(model_read(self.parsed)))
+        client.evaluate_lot(self.text, URL)
+        self.assertEqual(len(transport.requests), 1)
+        photos = [f"https://content.propertyroom.com/listings/origimgs/1_0{n}.jpg"
+                  for n in range(6)]
+        with self.assertRaises(BudgetExceeded):
+            client.evaluate_lot(self.text, URL, image_urls=photos)
+        self.assertEqual(len(transport.requests), 1)
+
     def test_base_url_comes_from_the_environment_at_construction(self):
         from unittest import mock
         with mock.patch.dict(os.environ, {"MODEL_API_BASE": "https://proxy.invalid/v9/"}):
@@ -127,6 +168,19 @@ class TestEmberClient(AgentTestCase):
 
 
 class TestBiddingAgent(AgentTestCase):
+    def test_evaluating_a_page_with_photos_sends_them_to_the_model(self):
+        ledger = self.ledger()
+        client, transport = self.live_client(ledger, json.dumps(model_read(self.parsed)))
+        parsed = dict(self.parsed)
+        parsed["photo_urls"] = ["https://content.propertyroom.com/listings/origimgs/1_01.jpg"]
+        agent = self.agent(ledger, client)
+        result = agent.evaluate_page(parsed, self.text, URL, all_in_max=1_500.00)
+        self.assertEqual(result.evaluation.verdict, "BID")
+        self.assertEqual(result.evaluation.photo_urls, parsed["photo_urls"])
+        content = transport.requests[0]["body"]["messages"][1]["content"]
+        self.assertIsInstance(content, list)
+        self.assertEqual(content[1]["image_url"]["url"], parsed["photo_urls"][0])
+
     def test_clearing_lot_in_dry_run_prints_the_exact_bid_and_spends_nothing(self):
         ledger = self.ledger()
         agent = self.agent(ledger, EmberClient(ledger=ledger, api_key="", transport=no_transport))

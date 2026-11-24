@@ -50,6 +50,11 @@ REASONING_EFFORT = "low"
 MAX_OUTPUT_TOKENS = 4_000
 # Conservative on purpose: English text runs about 4 characters per token.
 CHARS_PER_TOKEN_FOR_ESTIMATE = 3
+# Deliberately high token allowance per photo in the pre-call budget check.
+# The real image cost is whatever the API reports in usage; it is verified
+# against this allowance on the first photo runs and adjusted if it is higher.
+IMAGE_TOKENS_ALLOWANCE_PER_IMAGE = 4_000
+MAX_PHOTOS_PER_CALL = 6
 
 
 def price_call(input_tokens: int, cached_input_tokens: int,
@@ -65,9 +70,12 @@ def price_call(input_tokens: int, cached_input_tokens: int,
             + output_tokens * PRICE_OUTPUT_PER_M) / 1_000_000
 
 
-def worst_case_cost(prompt_chars: int) -> float:
-    """An upper estimate of one call's cost, used for the pre-call budget check."""
-    return price_call(prompt_chars // CHARS_PER_TOKEN_FOR_ESTIMATE + 1, 0,
+def worst_case_cost(prompt_chars: int, image_count: int = 0) -> float:
+    """An upper estimate of one call's cost, used for the pre-call budget check.
+    Each photo is priced at a deliberately high token allowance, so a call
+    with photos that could cross the budget is never sent either."""
+    return price_call(prompt_chars // CHARS_PER_TOKEN_FOR_ESTIMATE + 1
+                      + image_count * IMAGE_TOKENS_ALLOWANCE_PER_IMAGE, 0,
                       MAX_OUTPUT_TOKENS)
 
 
@@ -90,6 +98,10 @@ other text — with exactly these fields:
                                          // what this exact item, in the condition described, would fairly sell for
                                          // second-hand; basis is one short sentence on what you compared it to.
                                          // null if you cannot tell
+  "photo_notes": {"observations": [string], "risks": [string], "matches_listing": true/false, "summary": string} or null,
+                                         // what the lot's own photos show. null when no photos were sent.
+                                         // "risks" holds only photo findings that would make a careful
+                                         // buyer pause or walk away; "observations" holds the rest.
   "judgment": {
     "stance": "bid" | "no_bid" | "hold",
     "risks": [string],                   // short risk flags, e.g. "no keys", "does not start", "salvage title"
@@ -102,6 +114,20 @@ the page prints no premium, premium_pct is null and premium_stated is false. Nev
 shipping prices; list every delivery method in the page's shipping table, with "available": \
 false and a null price where it says "Not Available".
 
+You are also sent the lot's own photos (up to 6), as image parts after the page text. Read \
+them like a buyer standing in the yard: what condition is the item in, is there visible \
+damage, is a part it needs to work missing (a charger, a battery, a key, a wheel), and do \
+the photos match the title and the description? The listing's damage fields often say only \
+"SEE VEHICLE IMAGES" — the photos ARE the damage report. If a photo contradicts the text \
+(for example the page says the vehicle starts and runs but a photo shows a note that it \
+needs a jump start, or the title names a part the photos do not show), say so plainly. Put \
+what the photos show in "photo_notes": observations (what you saw), risks (only the photo \
+findings that would make a careful buyer pause or walk away), whether the photos match the \
+listing, and one sentence summing it up. If the photos show a problem the text does not, \
+your stance is "hold" (or "no_bid" if it should be avoided) — the photos can veto a bid \
+exactly as the text can. If the photos show nothing new, say so and keep the stance the \
+text supports.
+
 Your stance is about the item itself, the things the numbers cannot see. Use "hold" when a \
 careful buyer would want to look closer first and "no_bid" when it should be avoided, and base \
 it on specific red flags the listing states or leaves blank. For a vehicle: it does not start \
@@ -112,7 +138,7 @@ jewelry or a watch with no metal, stone or authenticity details; a brand item th
 replica. For any lot: specific damage called out, or a description that does not match the \
 title. Boilerplate that every PropertyRoom listing carries is NOT a red flag on its own: "sold \
 as-is", "untested", "not inspected by a certified mechanic", and damage fields that only say \
-"see images" (you cannot see the images; list that as a risk, but do not hold for it alone). \
+"see images" — that is what the photos are for; read them, do not hold for the words alone. \
 Do NOT hold because of the reserve, the fees, the price or the buyer's budget — those are \
 checked deterministically outside you. Your read can only make the agent more careful: a \
 "bid" stance never forces a bid."""
@@ -161,19 +187,27 @@ class EmberClient:
                     or DEFAULT_BASE_URL).rstrip("/") + "/chat/completions"
         self.transport = transport
 
-    def evaluate_lot(self, lot_text: str, lot_url: str) -> dict:
+    def evaluate_lot(self, lot_text: str, lot_url: str,
+                     image_urls: list | None = None) -> dict:
         """Send the lot page to Muse Ember, return its JSON evaluation.
+
+        `image_urls` are the lot's own photo URLs, sent as image_url parts
+        in the user message (OpenAI-compatible Chat Completions). With no
+        photos the request is exactly the text-only one from before.
 
         In fixture mode (no MODEL_API_KEY) returns a deterministic local
         evaluation in the same schema, marked simulated.
         """
+        image_urls = list(image_urls or [])[:MAX_PHOTOS_PER_CALL]
         if not self.live:
             result = self._fixture_evaluate(lot_text)
             result["_meta"] = {
                 "model": self.model, "simulated": True,
                 "note": ("No MODEL_API_KEY set — fixture mode. No model was "
                          "called; this is the deterministic local evaluator "
-                         "returning the same schema Ember would."),
+                         "returning the same schema Ember would. The lot's "
+                         "photos were not read — fixture mode has no model "
+                         "to read them."),
             }
             if self.ledger is not None:
                 self.ledger.record(lot_url=lot_url, model=self.model,
@@ -181,16 +215,25 @@ class EmberClient:
                                    output_tokens=0, cost_usd=0.0, simulated=True)
             return result
 
-        user_prompt = EVALUATION_USER_TEMPLATE.format(lot_text=lot_body(lot_text))
+        user_text = EVALUATION_USER_TEMPLATE.format(lot_text=lot_body(lot_text))
+        if image_urls:
+            user_text += ("\nThe lot's own photos follow as image parts — "
+                          "read them too, as the system prompt describes.")
+            user_content = ([{"type": "text", "text": user_text}]
+                            + [{"type": "image_url", "image_url": {"url": url}}
+                               for url in image_urls])
+        else:
+            user_content = user_text
         if self.ledger is not None:
             self.ledger.check_budget(
-                worst_case_cost(len(EVALUATION_SYSTEM_PROMPT) + len(user_prompt)))
+                worst_case_cost(len(EVALUATION_SYSTEM_PROMPT) + len(user_text),
+                                len(image_urls)))
 
         body = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": EVALUATION_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
+                {"role": "user", "content": user_content},
             ],
             "response_format": {"type": "json_object"},
             "temperature": 0,
@@ -260,6 +303,7 @@ class EmberClient:
             "shipping_options": parsed.get("shipping_options", []),
             "deposit_required": bool(parsed.get("deposit_required")),
             "estimated_value_usd": None,
+            "photo_notes": None,
             "judgment": {
                 "stance": stance,
                 "risks": risks,

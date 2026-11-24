@@ -65,7 +65,7 @@ from .cost_ledger import BudgetExceeded, CostLedger
 from .demo import (DEMO_PICKUP_COST_USD, DEMO_TAX_RATE, cli_command, demo_agent,
                    evaluate_demo_lot, find_live_lot, transcript_footer, transcript_header,
                    transcript_lot)
-from .demo_lots import DEMO_LOTS
+from .demo_lots import DEMO_LOTS, demo_config_version
 from .ember_client import EmberClient, EmberError
 from .lot_fetcher import FetchError, fetch_and_parse, fetch_lot_page
 from .watcher import snapshot
@@ -103,15 +103,17 @@ HOSTED_DEFAULT_TAX_RATE = DEMO_TAX_RATE
 SESSION_VERSION = 1
 # Scripts and data come only from this server. The two exceptions are the
 # web fonts, and data: images for the small arrow drawn inside select boxes.
+# The lot's own photos are loaded straight from content.propertyroom.com —
+# they are image files, not pages, so nothing here is framed or copied.
 CONTENT_SECURITY_POLICY = ("default-src 'self'; "
                            "style-src 'self' https://fonts.googleapis.com; "
                            "font-src https://fonts.gstatic.com; "
-                           "img-src 'self' data:")
+                           "img-src 'self' data: https://content.propertyroom.com")
 # What the Demo page shows of a listing: the lot page's own words, as read
 # when the demo ran.
 LISTING_FIELDS = ("title", "status", "ends_text", "current_price", "bid_increment",
                   "premium_pct", "premium_absent", "reserve_not_met", "condition",
-                  "shipping_options")
+                  "shipping_options", "photo_urls")
 # What is kept about a lot and about a demo entry between hosted requests.
 LOT_SESSION_FIELDS = ("snap", "ember_result", "view", "error", "checked_at", "used_model")
 DEMO_SESSION_FIELDS = ("snap", "reads", "listed", "as_if_live", "error", "listing",
@@ -328,6 +330,7 @@ class WebApp:
                       **{field: lot[field] for field in LOT_SESSION_FIELDS}}
                      for lot in self.lots],
             "demo": {"ran_at": self.demo_ran_at,
+                     "config_version": demo_config_version(),
                      "live": entry_out(self.demo_live) if self.demo_live else None,
                      "entries": [entry_out(entry) for entry in self.demo]},
         }
@@ -370,6 +373,13 @@ class WebApp:
 
         demo = session.get("demo")
         if not isinstance(demo, dict):
+            return
+        # A stored demo run belongs to the demo lots as they were. If the
+        # lots have changed since (a lot added, a max changed), the stored
+        # results are stale — leave them behind and the visitor runs the
+        # demo fresh against the new list. Sessions stored before versioning
+        # have no config_version, so they are stale by definition.
+        if demo.get("config_version") != demo_config_version():
             return
         self.demo_ran_at = demo["ran_at"] if isinstance(demo.get("ran_at"), str) else None
         # The fixed demo lots are the server's own; only what was learned
@@ -526,7 +536,8 @@ class WebApp:
             if key != entry["snap"]:
                 entry["reads"] = {}
             listed, live = evaluate_demo_lot(self.demo_agent, lot, lot_text,
-                                             entry["reads"], self.now())
+                                             entry["reads"], self.now(),
+                                             parsed=parsed)
             entry.update(snap=key, listed=_result_view(listed),
                          as_if_live=_result_view(live) if live else None,
                          listing={field: parsed.get(field) for field in LISTING_FIELDS},

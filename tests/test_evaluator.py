@@ -257,6 +257,59 @@ class TestModelCanOnlyMakeTheAgentMoreCareful(unittest.TestCase):
         self.assertEqual(ev.verdict, "BID")
 
 
+class TestPhotoVeto(unittest.TestCase):
+    """The photos can veto a bid exactly like any other Ember objection:
+    the model said "bid" on the text, but what it saw in the photos stops it."""
+
+    def evaluate(self, parsed, read, all_in_max=6_000.00):
+        return evaluate(parsed, read, URL, all_in_max=all_in_max, tax_rate=0.10,
+                        pickup_cost_usd=0.0)
+
+    def photo_read(self, parsed, **photo_notes):
+        return model_read(parsed, stance="bid",
+                          estimated_value_usd={"low": 5_000, "high": 6_500,
+                                               "basis": "Comparable cars."},
+                          photo_notes=photo_notes)
+
+    def test_photo_risks_hold_a_lot_the_text_would_bid_on(self):
+        parsed = live_lot_with_premium()
+        read = self.photo_read(
+            parsed,
+            observations=["A handwritten note is taped to the windshield."],
+            risks=["The windshield note says the car needs a jump start and leaks coolant."],
+            matches_listing=False,
+            summary="The photos contradict the text: the car does not reliably start.")
+        ev = self.evaluate(parsed, read)
+        self.assertEqual(ev.verdict, "HOLD_FOR_HUMAN")
+        self.assertIn("jump start", ev.reason)
+        self.assertIn("Photo: The windshield note says the car needs a jump start "
+                      "and leaks coolant.", ev.risk_flags)
+        self.assertEqual(ev.photo_notes["summary"],
+                         "The photos contradict the text: the car does not reliably start.")
+
+    def test_photo_observations_without_risks_do_not_hold(self):
+        parsed = live_lot_with_premium()
+        read = self.photo_read(
+            parsed, observations=["The car looks clean in the photos."],
+            risks=[], matches_listing=True,
+            summary="The photos match the listing.")
+        self.assertEqual(self.evaluate(parsed, read).verdict, "BID")
+
+    def test_the_render_quotes_what_the_photos_showed(self):
+        parsed = live_lot_with_premium()
+        read = self.photo_read(
+            parsed,
+            observations=["A handwritten note is taped to the windshield."],
+            risks=["The windshield note says the car needs a jump start and leaks coolant."],
+            matches_listing=False,
+            summary="The photos contradict the text: the car does not reliably start.")
+        text = render(self.evaluate(parsed, read))
+        self.assertIn("Photos: The photos contradict the text: the car does not "
+                      "reliably start. — do NOT match the listing", text)
+        self.assertIn("photo risk: The windshield note says the car needs a jump start "
+                      "and leaks coolant.", text)
+
+
 class TestBidPlan(unittest.TestCase):
     """A BID comes with what to enter on the site. Rates here: 15% premium,
     10% tax, so all-in = hammer * 1.265 (+ shipping)."""

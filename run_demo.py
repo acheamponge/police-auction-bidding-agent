@@ -36,7 +36,7 @@ from src.demo import (demo_agent, evaluate_demo_lot, find_live_lot,  # noqa: E40
                       transcript_footer, transcript_header, transcript_lot)
 from src.demo_lots import DEMO_LOTS  # noqa: E402
 from src.ember_client import EmberClient  # noqa: E402
-from src.lot_fetcher import fetch_and_parse, fetch_lot_page, html_to_text  # noqa: E402
+from src.lot_fetcher import fetch_and_parse, fetch_lot_page  # noqa: E402
 
 
 def main() -> int:
@@ -82,8 +82,8 @@ def main() -> int:
     for lot in lots:
         listed = live = error = None
         try:
-            lot_text = html_to_text(fetch_lot_page(lot["url"]))
-            listed, live = evaluate_demo_lot(agent, lot, lot_text)
+            parsed, lot_text = fetch_and_parse(lot["url"])
+            listed, live = evaluate_demo_lot(agent, lot, lot_text, parsed=parsed)
         except Exception as exc:  # noqa: BLE001 — demo should show the failure
             error = str(exc)
         print("\n".join(transcript_lot(lot["label"], lot["all_in_max"], listed, live, error)))

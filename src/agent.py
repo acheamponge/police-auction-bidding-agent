@@ -63,7 +63,8 @@ class BiddingAgent:
                       confirm: bool = False,
                       ember_result: dict | None = None) -> AgentResult:
         if ember_result is None:
-            ember_result = self.ember.evaluate_lot(lot_text, lot_url)
+            ember_result = self.ember.evaluate_lot(
+                lot_text, lot_url, image_urls=parsed.get("photo_urls"))
         evaluation = evaluate(
             parsed, ember_result, lot_url, all_in_max,
             tax_rate=self.tax_rate,

@@ -116,6 +116,35 @@ _END_DATE = r"[A-Za-z]{3}\s+\d{1,2},\s+\d{4}\s+at\s+[\d:]+\s+[AP]M\s*\(Eastern\)
 LOT_BODY_LIMIT_CHARS = 20_000
 
 
+# The lot's own photos live on content.propertyroom.com under /listings/.
+# Each photo appears up to three times — origimgs / ttlimgs / thmbimgs are
+# the same image at different sizes — and merchant banners live under
+# /listings/banners/, so those are excluded and photos are deduped by file
+# name, preferring the full-size original. The listing's damage fields often
+# say only "SEE VEHICLE IMAGES": the photos ARE the damage report, so the
+# agent reads them, not just the text.
+_PHOTO_RE = re.compile(
+    r"https://content\.propertyroom\.com/listings/(?!banners/)[^\"'\s<>]+\.jpg",
+    re.IGNORECASE)
+_PHOTO_SIZE_RANK = {"origimgs": 0, "ttlimgs": 1, "thmbimgs": 2}
+MAX_PHOTOS = 6
+
+
+def extract_photo_urls(html_text: str, limit: int = MAX_PHOTOS) -> list[str]:
+    """The lot's own photo URLs, in page order, deduped by file name."""
+    best: dict[str, tuple[int, str]] = {}
+    order: list[str] = []
+    for url in _PHOTO_RE.findall(html_text):
+        base = url.rsplit("/", 1)[-1]
+        folder = next((k for k in _PHOTO_SIZE_RANK if f"/{k}/" in url), None)
+        rank = _PHOTO_SIZE_RANK.get(folder, 3)
+        if base not in best or rank < best[base][0]:
+            best[base] = (rank, url)
+        if base not in order:
+            order.append(base)
+    return [best[base][1] for base in order[:limit]]
+
+
 def lot_body(text: str) -> str:
     """The part of the page text worth sending to the model: from the lot's
     title line (the line above "Listing ID") onward, capped in length."""
@@ -224,7 +253,10 @@ def parse_lot_text(text: str) -> dict:
 
 
 def fetch_and_parse(url: str) -> tuple[dict, str]:
-    """Fetch a lot page and return (parsed fields, cleaned page text)."""
+    """Fetch a lot page and return (parsed fields, cleaned page text).
+    The parsed fields carry the lot's own photo URLs under "photo_urls"."""
     raw_html = fetch_lot_page(url)
     text = html_to_text(raw_html)
-    return parse_lot_text(text), text
+    parsed = parse_lot_text(text)
+    parsed["photo_urls"] = extract_photo_urls(raw_html)
+    return parsed, text

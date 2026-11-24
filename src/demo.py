@@ -77,20 +77,30 @@ def demo_agent(ledger: CostLedger, ember: EmberClient) -> BiddingAgent:
 
 def evaluate_demo_lot(agent: BiddingAgent, lot: dict, lot_text: str,
                       earlier_reads: dict | None = None,
-                      now: datetime.datetime | None = None) -> tuple[AgentResult, AgentResult | None]:
+                      now: datetime.datetime | None = None,
+                      parsed: dict | None = None) -> tuple[AgentResult, AgentResult | None]:
     """Evaluate one demo lot as listed and, if it has ended, as-if-live.
 
     `earlier_reads` may hold Ember's reads from a previous run of the same
     page text ({"listed": ..., "as_if_live": ...}); those are reused, so
     re-running an unchanged demo costs nothing.
+
+    `parsed` is the lot's parsed fields when the caller already fetched them
+    (it carries the lot's photo URLs); without it the fields are re-parsed
+    from the text, which carries no photos. The as-if-live run re-parses the
+    changed text and carries the same photos over — it is the same lot.
     """
     earlier_reads = earlier_reads or {}
-    listed = agent.evaluate_page(parse_lot_text(lot_text), lot_text, lot["url"],
+    if parsed is None:
+        parsed = parse_lot_text(lot_text)
+    listed = agent.evaluate_page(parsed, lot_text, lot["url"],
                                  lot["all_in_max"], ember_result=earlier_reads.get("listed"))
     if listed.evaluation.status != "ended":
         return listed, None
     live_text = as_if_live(lot_text, now)
-    return listed, agent.evaluate_page(parse_lot_text(live_text), live_text, lot["url"],
+    live_parsed = parse_lot_text(live_text)
+    live_parsed["photo_urls"] = parsed.get("photo_urls")
+    return listed, agent.evaluate_page(live_parsed, live_text, lot["url"],
                                        lot["all_in_max"],
                                        ember_result=earlier_reads.get("as_if_live"))
 
