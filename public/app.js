@@ -61,6 +61,47 @@ function setBusy(on) {
   for (const control of document.querySelectorAll("main button, main input, main select")) control.disabled = on;
 }
 
+// ---- toasts (sonner): one region, toast() from anywhere ----------------------
+// Short, in the interface's voice. Kinds: default, good, warn, destructive.
+
+function toast(message, kind) {
+  const region = $("toaster");
+  if (!region) return;
+  while (region.children.length >= 3) region.firstElementChild.remove();
+  const node = el("div", { class: "toast" + (kind && kind !== "default" ? " toast-" + kind : "") },
+    el("span", { class: "toast-message" }, message),
+    el("button", { class: "toast-close", type: "button", "aria-label": "Dismiss notification",
+      onclick: (event) => { event.currentTarget.parentElement.remove(); } }, "×"));
+  region.append(node);
+  setTimeout(() => { node.classList.add("leaving"); setTimeout(() => node.remove(), 220); }, 4500);
+}
+
+const firstSentence = (text) => (text || "").split(".")[0];
+
+function toastVerdict(state, url) {
+  const lot = (state.lots || []).find((item) => item.url === url);
+  if (!lot || !lot.evaluation) return;
+  const o = outcome(lot);
+  const e = lot.evaluation;
+  if (o.key === "bid") {
+    toast("Bid plan ready: " + (e.bid_is_proxy ? "proxy maximum " : "bid ") + money(e.bid_amount) +
+      ", all-in at most " + money(e.all_in_at_bid) + ".", "good");
+  } else if (o.key === "hold" && e.verdict === "BID") {
+    toast("Bid plan blocked by the spending policy. " + (lot.policy_note || "Check the Policy page."), "destructive");
+  } else if (o.key === "hold") {
+    toast("Held for you: " + firstSentence(e.reason) + ".", "warn");
+  } else if (o.key === "nobid") {
+    toast("No bid: " + firstSentence(e.reason) + ".", "default");
+  }
+}
+
+function toastCounts(state) {
+  const counts = { bid: 0, hold: 0, nobid: 0, none: 0 };
+  for (const lot of state.lots) counts[outcome(lot).key] += 1;
+  toast("Checked " + plural(state.lots.length, "lot") + ": " + counts.bid + " bid plan" +
+    (counts.bid === 1 ? "" : "s") + ", " + counts.hold + " held, " + counts.nobid + " no bid.", "default");
+}
+
 // Send a change to the server (or just read the state) and redraw from the reply.
 async function send(path, body, working) {
   if (busy) return false;
@@ -79,16 +120,19 @@ async function send(path, body, working) {
     const data = await response.json();
     if (!response.ok) {
       setStatus(data.error || "Something went wrong.", true);
+      toast(data.error || "Something went wrong. Try again in a moment.", "destructive");
       return false;
     }
     if (data.session) saveSession(data.session);
     setBusy(false);
     render(data);
     setStatus("");
-    return true;
+    return data;
   } catch (error) {
     setStatus(HOSTED ? "Could not reach the server. Try again in a moment."
       : "Could not reach the app. Is `python3 ui.py` still running?", true);
+    toast(HOSTED ? "Could not reach the server. Try again in a moment."
+      : "Could not reach the app. Is `python3 ui.py` still running?", "destructive");
     return false;
   } finally {
     setBusy(false);
@@ -108,17 +152,17 @@ function kpi(label, value, sub, tone) {
 
 // What a result comes to, once the policy gate has had its say.
 function outcome(view) {
-  if (!view || !view.evaluation) return { key: "none", label: "NOT CHECKED", pill: "", card: "card-slate" };
+  if (!view || !view.evaluation) return { key: "none", label: "NOT CHECKED", pill: "", card: "card-slate", stamp: "stamp-none" };
   const verdict = view.evaluation.verdict;
-  if (verdict === "BID" && view.policy_decision === "DRY_RUN") return { key: "bid", label: "BID", pill: "pill-go", card: "card-good" };
-  if (verdict === "BID") return { key: "hold", label: "BLOCKED BY POLICY", pill: "pill-cond", card: "card-amber" };
-  if (verdict === "NO_BID") return { key: "nobid", label: "NO BID", pill: "pill-prop", card: "card-slate" };
-  return { key: "hold", label: "HOLD FOR YOU", pill: "pill-cond", card: "card-amber" };
+  if (verdict === "BID" && view.policy_decision === "DRY_RUN") return { key: "bid", label: "BID", pill: "pill-go", card: "card-good", stamp: "stamp-bid" };
+  if (verdict === "BID") return { key: "hold", label: "BLOCKED BY POLICY", pill: "pill-cond", card: "card-amber", stamp: "stamp-hold" };
+  if (verdict === "NO_BID") return { key: "nobid", label: "NO BID", pill: "pill-prop", card: "card-slate", stamp: "stamp-nobid" };
+  return { key: "hold", label: "HOLD FOR YOU", pill: "pill-cond", card: "card-amber", stamp: "stamp-hold" };
 }
 
 const verdictPill = (view) => {
   const o = outcome(view);
-  return el("span", { class: "pill verdict " + o.pill }, o.label);
+  return el("span", { class: "stamp " + o.stamp, "data-state": o.key }, o.label);
 };
 
 function plan(view) {
@@ -336,9 +380,9 @@ function terminalView(lot) {
     onclick: async () => {
       try {
         await navigator.clipboard.writeText(command);
-        setStatus("Command copied. Paste it into a terminal in the project folder.");
+        toast("Command copied. Paste it into a terminal in the project folder.", "good");
       } catch (error) {
-        setStatus("Could not copy. Select the command and copy it by hand.", true);
+        toast("Could not copy. Select the command and copy it by hand.", "destructive");
       }
     } }, "Copy command");
   return el("div", { class: "card terminal" },
@@ -425,9 +469,10 @@ function maxForm(lot) {
     placeholder: "none", value: lot.all_in_max === null ? null : lot.all_in_max });
   const suggested = lot.evaluation && lot.evaluation.suggested_all_in_max;
   return el("form", { class: "max-form",
-      onsubmit: (event) => {
+      onsubmit: async (event) => {
         event.preventDefault();
-        send("/api/lots/max", { url: lot.url, all_in_max: numberOrNull(input) }, "Re-working the verdict…");
+        const data = await send("/api/lots/max", { url: lot.url, all_in_max: numberOrNull(input) }, "Re-working the verdict…");
+        if (data) toastVerdict(data, lot.url);
       } },
     el("label", { class: "field" },
       el("span", {}, "Your all-in max" + (suggested ? " (suggested " + money(suggested) + ")" : "")),
@@ -435,23 +480,26 @@ function maxForm(lot) {
     el("button", { class: "btn", type: "submit" }, "Update"));
 }
 
+const lotId = (url) => { const match = /\/(\d+)\/?$/.exec(url || ""); return match ? match[1] : null; };
+const lotTag = (lot) => { const id = lotId(lot.url); return id ? "Lot " + id : "Lot link"; };
+
 function lotCard(lot) {
   const e = lot.evaluation;
   const actions = el("div", { class: "lot-actions" },
     lot.checked_at && el("span", { class: "checked" },
       "Checked " + new Date(lot.checked_at).toLocaleTimeString() + (lot.used_model ? " · model called" : "")),
     el("button", { class: "btn btn-quiet", type: "button",
-      onclick: () => send("/api/lots/check", { url: lot.url }, "Re-reading the lot page…") }, "Check again"),
+      onclick: async () => { const data = await send("/api/lots/check", { url: lot.url }, "Re-reading the lot page…"); if (data) toastVerdict(data, lot.url); } }, "Check again"),
     el("button", { class: "btn btn-quiet", type: "button",
-      onclick: () => send("/api/lots/remove", { url: lot.url }, "Removing…") }, "Remove"));
+      onclick: async () => { const data = await send("/api/lots/remove", { url: lot.url }, "Removing…"); if (data) toast("Lot removed.", "default"); } }, "Remove"));
 
   if (!e) {
     return el("article", { class: "card card-accent lot " + (lot.error ? "card-crit" : "card-slate") },
       el("div", { class: "lot-head" },
         el("div", { class: "lot-title" },
           el("h3", {}, lotLink(lot.url, lot.url)),
-          el("p", { class: "lot-sub" }, lot.error ? "Could not be evaluated" : "Not checked since the app started")),
-        el("span", { class: "pill verdict " + (lot.error ? "pill-nogo" : "") }, lot.error ? "ERROR" : "NOT CHECKED")),
+          el("p", { class: "lot-sub" }, lotTag(lot) + " — " + (lot.error ? "could not be evaluated" : "not checked since the app started"))),
+        el("span", { class: "stamp " + (lot.error ? "stamp-nobid" : "stamp-none"), "data-state": lot.error ? "error" : "none" }, lot.error ? "ERROR" : "NOT CHECKED")),
       lot.error && el("p", { class: "error-box" }, lot.error),
       el("div", { class: "lot-foot" }, maxForm(lot), actions));
   }
@@ -459,7 +507,7 @@ function lotCard(lot) {
     el("div", { class: "lot-head" },
       el("div", { class: "lot-title" },
         el("h3", {}, lotLink(lot.url, e.title || lot.url)),
-        el("p", { class: "lot-sub" }, statusWord(e))),
+        el("p", { class: "lot-sub" }, lotTag(lot), " — ", statusWord(e))),
       verdictPill(lot)),
     resultBody(lot),
     el("div", { class: "lot-foot" }, maxForm(lot), actions));
@@ -561,27 +609,40 @@ function wire() {
     $("demo-run").addEventListener("click", async () => {
       const fixed = lastState ? lastState.demo.lots.filter((lot) => !lot.live_now).length : 4;
       const steps = ["live", ...Array.from({ length: fixed }, (unused, index) => index)];
+      let finished = true;
       for (const [position, step] of steps.entries()) {
         const working = step === "live"
           ? "Looking for an auction that is live on PropertyRoom right now…"
           : "Running lot " + (position + 1) + " of " + steps.length + "…";
-        if (!(await send("/api/demo/run", { step }, working))) break;
+        if (!(await send("/api/demo/run", { step }, working))) { finished = false; break; }
         if (step === "live") demoSelected = 0;
+      }
+      if (finished && lastState) {
+        const finals = lastState.demo.lots.map((lot) => lot.as_if_live || lot.listed).filter(Boolean);
+        const counts = { bid: 0, hold: 0, nobid: 0 };
+        for (const view of finals) { const key = outcome(view).key; if (counts[key] !== undefined) counts[key] += 1; }
+        toast("Demo finished: " + counts.bid + " bid plan" + (counts.bid === 1 ? "" : "s") +
+          ", " + counts.hold + " held, " + counts.nobid + " no bid.", "default");
       }
     });
   }
   if (PAGE === "lots") {
     $("add-form").addEventListener("submit", async (event) => {
       event.preventDefault();
+      const url = $("add-url").value;
       const added = await send("/api/lots",
-        { url: $("add-url").value, all_in_max: numberOrNull($("add-max")) },
+        { url, all_in_max: numberOrNull($("add-max")) },
         "Reading the lot page and working out a verdict. This can take a few seconds…");
       if (added) {
         $("add-url").value = "";
         $("add-max").value = "";
+        toastVerdict(added, url);
       }
     });
-    $("check-all").addEventListener("click", () => send("/api/lots/check-all", {}, "Re-reading every live lot…"));
+    $("check-all").addEventListener("click", async () => {
+      const data = await send("/api/lots/check-all", {}, "Re-reading every live lot…");
+      if (data) toastCounts(data);
+    });
     $("auto-check").addEventListener("change", () => {
       clearInterval(autoTimer);
       const minutes = Number($("auto-check").value);
@@ -591,18 +652,164 @@ function wire() {
     });
   }
   if (PAGE === "policy") {
-    $("settings-form").addEventListener("submit", (event) => {
+    $("settings-form").addEventListener("submit", async (event) => {
       event.preventDefault();
       const tax = numberOrNull($("set-tax"));
-      send("/api/settings", {
+      const data = await send("/api/settings", {
         tax_rate: tax === null ? null : tax / 100,
         pickup_cost_usd: numberOrNull($("set-pickup")),
         shipping_preference: $("set-shipping").value,
       }, "Re-working every verdict…");
+      if (data) toast("Assumptions updated. Verdicts re-worked without a model call.", "good");
     });
   }
 }
 
+// ---- theme (shadcn: dark mode is a token swap) ------------------------------
+
+function setTheme(dark) {
+  document.documentElement.classList.toggle("dark", dark);
+  try { localStorage.setItem("paba-theme", dark ? "dark" : "light"); } catch (error) {}
+  const toggle = $("theme-toggle");
+  if (toggle) toggle.setAttribute("aria-pressed", String(dark));
+}
+
+function initTheme() {
+  const toggle = $("theme-toggle");
+  if (!toggle) return;
+  toggle.setAttribute("aria-pressed", String(document.documentElement.classList.contains("dark")));
+  toggle.addEventListener("click", () => setTheme(!document.documentElement.classList.contains("dark")));
+}
+
+// ---- command palette (cmdk): keyboard-first, grouped, data attributes ------
+
+const COMMANDS = [
+  { group: "Pages", label: "Go to Overview", hint: "1", run: () => { location.href = "/"; } },
+  { group: "Pages", label: "Go to Demo", hint: "2", run: () => { location.href = "/demo"; } },
+  { group: "Pages", label: "Go to Lots", hint: "3", run: () => { location.href = "/lots"; } },
+  { group: "Pages", label: "Go to Policy", hint: "4", run: () => { location.href = "/policy"; } },
+  { group: "Pages", label: "Go to Ledger", hint: "5", run: () => { location.href = "/ledger"; } },
+  { group: "Pages", label: "Go to Method", hint: "6", run: () => { location.href = "/method"; } },
+  { group: "Pages", label: "Go to Command line", hint: "7", run: () => { location.href = "/cli"; } },
+  { group: "Actions", label: "Evaluate a lot", hint: "", run: () => {
+    try { sessionStorage.setItem("paba-focus-add-url", "1"); } catch (error) {}
+    location.href = "/lots";
+  } },
+  { group: "Actions", label: "Check all lots", hint: "", run: async () => {
+    const data = await send("/api/lots/check-all", {}, "Re-reading every live lot…");
+    if (data) toastCounts(data);
+  } },
+  { group: "Actions", label: "Run the demo", hint: "", run: () => {
+    if (PAGE === "demo") { $("demo-run").click(); return; }
+    try { sessionStorage.setItem("paba-auto-run-demo", "1"); } catch (error) {}
+    location.href = "/demo";
+  } },
+  { group: "Actions", label: "Toggle dark mode", hint: "", run: () => setTheme(!document.documentElement.classList.contains("dark")) },
+];
+
+let paletteOpen = false;
+let paletteSelected = 0;
+let paletteItems = [];
+let paletteReturnFocus = null;
+
+function renderPaletteList(filter) {
+  const list = $("palette-list");
+  const query = (filter || "").trim().toLowerCase();
+  paletteItems = COMMANDS.filter((cmd) => !query || cmd.label.toLowerCase().includes(query));
+  paletteSelected = 0;
+  list.replaceChildren();
+  let lastGroup = null;
+  for (const [index, cmd] of paletteItems.entries()) {
+    if (cmd.group !== lastGroup) {
+      list.append(el("div", { class: "palette-group", role: "presentation" }, cmd.group));
+      lastGroup = cmd.group;
+    }
+    list.append(el("button", {
+      class: "palette-item", type: "button", role: "option", id: "palette-item-" + index,
+      "data-cmdk-item": "", "data-selected": String(index === paletteSelected),
+      "aria-selected": String(index === paletteSelected),
+      onclick: () => { paletteSelected = index; paletteRun(); },
+    }, el("span", {}, cmd.label), cmd.hint && el("span", { class: "hint" }, cmd.hint)));
+  }
+  $("palette-empty").hidden = paletteItems.length > 0;
+  const input = $("palette-input");
+  input.setAttribute("aria-activedescendant", paletteItems.length ? "palette-item-0" : "");
+}
+
+function paletteMove(delta) {
+  if (!paletteItems.length) return;
+  paletteSelected = (paletteSelected + delta + paletteItems.length) % paletteItems.length;
+  for (const [index, node] of [...$("palette-list").querySelectorAll("[data-cmdk-item]")].entries()) {
+    node.setAttribute("data-selected", String(index === paletteSelected));
+    node.setAttribute("aria-selected", String(index === paletteSelected));
+  }
+  $("palette-input").setAttribute("aria-activedescendant", "palette-item-" + paletteSelected);
+  const active = $("palette-item-" + paletteSelected);
+  if (active) active.scrollIntoView({ block: "nearest" });
+}
+
+function paletteRun() {
+  const cmd = paletteItems[paletteSelected];
+  if (!cmd) return;
+  closePalette();
+  cmd.run();
+}
+
+function openPalette() {
+  paletteOpen = true;
+  paletteReturnFocus = document.activeElement;
+  $("palette").hidden = false;
+  $("palette-input").value = "";
+  renderPaletteList("");
+  $("palette-input").focus();
+}
+
+function closePalette() {
+  paletteOpen = false;
+  $("palette").hidden = true;
+  if (paletteReturnFocus && paletteReturnFocus.focus) paletteReturnFocus.focus();
+}
+
+function initPalette() {
+  const palette = $("palette");
+  const input = $("palette-input");
+  const trigger = $("palette-button");
+  if (!palette || !input) return;
+  if (trigger) trigger.addEventListener("click", openPalette);
+  palette.addEventListener("click", (event) => { if (event.target === palette) closePalette(); });
+  input.addEventListener("input", () => renderPaletteList(input.value));
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown") { event.preventDefault(); paletteMove(1); }
+    else if (event.key === "ArrowUp") { event.preventDefault(); paletteMove(-1); }
+    else if (event.key === "Enter") { event.preventDefault(); paletteRun(); }
+    else if (event.key === "Escape") { event.preventDefault(); closePalette(); }
+  });
+  document.addEventListener("keydown", (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+      event.preventDefault();
+      if (paletteOpen) closePalette(); else openPalette();
+    }
+  });
+}
+
+function initDeepLinks() {
+  try {
+    if (sessionStorage.getItem("paba-focus-add-url")) {
+      sessionStorage.removeItem("paba-focus-add-url");
+      const input = $("add-url");
+      if (input) input.focus();
+    }
+    if (sessionStorage.getItem("paba-auto-run-demo")) {
+      sessionStorage.removeItem("paba-auto-run-demo");
+      const button = $("demo-run");
+      if (button) button.click();
+    }
+  } catch (error) {}
+}
+
 setUpNav();
 wire();
+initTheme();
+initPalette();
+initDeepLinks();
 send("/api/state", undefined, "");
