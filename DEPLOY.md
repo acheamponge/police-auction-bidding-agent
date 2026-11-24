@@ -1,5 +1,7 @@
 # Deploying the demo UI to Vercel
 
+The project's own deployment is at <https://police-auction-bidding-agent.vercel.app>.
+
 The demo UI runs on Vercel as one Python function plus a folder of static
 files. There is nothing to build and nothing to install: the project uses
 only Python's standard library.

@@ -2,6 +2,12 @@
 
 **Built with Muse on iPhone** — designed, coded, tested, and demoed from the Muse iPhone app.
 
+**[Try it live](https://police-auction-bidding-agent.vercel.app)**. No sign-in, and
+nothing can be bid. Open [Demo](https://police-auction-bidding-agent.vercel.app/demo)
+and press Run the demo to watch an auction that is live on PropertyRoom right
+now, and four past lots, go through the agent on Muse Ember. Or paste a lot
+link of your own on [Lots](https://police-auction-bidding-agent.vercel.app/lots).
+
 An agent that bids on PropertyRoom police auctions without ever bidding
 blind. It evaluates a lot, reads the buyer's premium, tax, and shipping
 off the lot's own page, sets an all-in max it will not exceed, and bids
@@ -267,8 +273,9 @@ assumptions, or re-running the demo, re-works verdicts without another call.
 
 ### On Vercel
 
-The same UI deploys to Vercel as one Python function plus the `public/`
-folder; [DEPLOY.md](DEPLOY.md) has the steps. Hosted, the server keeps
+The UI is live at <https://police-auction-bidding-agent.vercel.app>. It
+deploys to Vercel as one Python function plus the `public/` folder;
+[DEPLOY.md](DEPLOY.md) has the steps. Hosted, the server keeps
 nothing between requests, so each visitor's lots and assumptions live in
 their own browser, and the ledger is per server instance. Anyone with the
 link can spend the key you give it, so read the notes there first.
