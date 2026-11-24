@@ -346,7 +346,7 @@ function renderOverview(state) {
     const checked = state.lots.length - counts.none;
     let eyebrow = "Start here";
     let title = "No lots on your list yet";
-    let note = "Run the demo to watch six real lots go through the agent, or paste a lot link on the Lots page.";
+    let note = "Run the demo to watch seven real lots go through the agent, or paste a lot link on the Lots page.";
     if (state.lots.length && !checked) {
       eyebrow = "Waiting on you";
       title = plural(counts.none, "lot") + " on your list, not checked yet";
@@ -499,7 +499,7 @@ function renderDemo(state) {
   $("demo-note").textContent =
     "Demo assumptions: " + (demo.tax_rate * 100).toFixed(0) + "% tax and " + money(demo.pickup_cost_usd) +
     " pickup cost on top of the page's fee (a local buyer). " +
-    (live ? "On the live model a first run makes up to thirteen calls, a few cents in total. Running it again costs nothing unless a page changed."
+    (live ? "On the live model a first run makes up to fifteen calls, a few cents in total. Running it again costs nothing unless a page changed."
       : "Fixture mode: no model is called, so there is no second read and no value estimate. Start the app with a key to see Muse Ember's part.");
   $("demo-run").textContent = demo.ran_at ? "Run it again" : "Run the demo";
 

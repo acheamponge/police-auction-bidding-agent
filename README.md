@@ -5,7 +5,7 @@
 **[Try it live](https://police-auction-bidding-agent.vercel.app)**. No sign-in, and
 nothing can be bid. Open [Demo](https://police-auction-bidding-agent.vercel.app/demo)
 and press Run the demo to watch an auction that is live on PropertyRoom right
-now, and six past lots, go through the agent on Muse Ember. Or paste a lot
+now, and seven past lots, go through the agent on Muse Ember. Or paste a lot
 link of your own on [Lots](https://police-auction-bidding-agent.vercel.app/lots).
 
 An agent that bids on PropertyRoom police auctions without ever bidding

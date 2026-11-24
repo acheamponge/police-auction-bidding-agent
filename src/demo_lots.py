@@ -26,6 +26,12 @@ pass --lot <url> to evaluate any other lot, including a live one.
    handwritten yard notes — "Requirg Jump" and "Coolant leak" — that appear
    nowhere in the text. On text alone Ember split (one run "bid", one "hold");
    the photos settle it: HOLD_FOR_HUMAN, with the photo notes quoted.
+7. 2019 Chevrolet Cruze LS (Hartford, CT) — 12% premium, $2,850, no reserve,
+   live when added (Nov 24, 2026; ends Nov 25, 5:22 PM ET). The bid lot that
+   replaced the trailer tape: the tape's photos turned out to be stock
+   graphics, so Ember holds it now. This Cruze is clean — stance "bid", value
+   $6,000–$8,000, photos consistent with the listing — so the demo still shows
+   a bid plan from a fixed lot.
 """
 
 DEMO_LOTS = [
@@ -58,6 +64,11 @@ DEMO_LOTS = [
         "url": "https://www.propertyroom.com/l/2015-chevrolet-impala/19035234",
         "label": "2015 Chevrolet Impala — the photo case: the text says it runs, the windshield says it needs a jump start and leaks coolant",
         "all_in_max": 4_500.00,
+    },
+    {
+        "url": "https://www.propertyroom.com/l/2019-chevrolet-cruze-ls/19022652",
+        "label": "2019 Chevrolet Cruze LS — the bid lot: clean, runs and drives, photos match the listing",
+        "all_in_max": 5_500.00,
     },
 ]
 
