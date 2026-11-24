@@ -5,7 +5,7 @@
 **[Try it live](https://police-auction-bidding-agent.vercel.app)**. No sign-in, and
 nothing can be bid. Open [Demo](https://police-auction-bidding-agent.vercel.app/demo)
 and press Run the demo to watch an auction that is live on PropertyRoom right
-now, and four past lots, go through the agent on Muse Ember. Or paste a lot
+now, and five past lots, go through the agent on Muse Ember. Or paste a lot
 link of your own on [Lots](https://police-auction-bidding-agent.vercel.app/lots).
 
 An agent that bids on PropertyRoom police auctions without ever bidding
@@ -189,7 +189,7 @@ running total, including runs made from the UI since.
 Run Nov 23, 2026 on live Muse Ember, against real lot pages fetched at run
 time. Assumptions: 10% tax, $0 pickup cost (a local buyer).
 
-`python3 run_demo.py --live-ember` evaluates four real lots. The three that
+`python3 run_demo.py --live-ember` evaluates five real lots. The four that
 have ended are each run twice: as listed, and "as-if-live" (the "Ended" line
 rewritten to "Ends", fee data untouched) so the paths past "auction ended"
 are exercised.
@@ -200,6 +200,7 @@ are exercised.
 | 2014 Chevrolet Caprice, ended $4,450, max $6,000 | 15% | $4,500 -> $5,716.45 | NO_BID (ended) | **HOLD_FOR_HUMAN** — reserve not met (soft-reserve trap) | Starts and runs, key, regular title: stance "bid". Worth $5,000 to $8,000 |
 | 2007 Toyota Prius, ended $800, max $1,500 | 15% | $850 -> $1,099.20 | NO_BID (ended) | **HOLD_FOR_HUMAN** — math clears, Ember objects | Salvage title; start/run, key and mileage all unknown. Worth $400 to $1,200 |
 | Dell Latitude 7220 tablet, live at $181, max $400 | none | $184 -> $214.35 | **HOLD_FOR_HUMAN** — math clears, Ember objects | (still live) | Powers on, but no power adapter and no Windows key. Worth $200 to $350 |
+| 50-ft reflective trailer tape, live at $5, max $30 (verified Nov 24, 2026) | none | $8 -> $23.75 | **BID** — proxy maximum $9.00, all-in at most $24.85 (DRY_RUN) | (still live) | Brand new, stance "bid". Worth $10 to $25 |
 
 A vehicle that was really live at the time, through `evaluate.py` with a
 $5,000 max:
@@ -219,7 +220,7 @@ Everyday lots, which print no buyer's premium:
 `watch.py` ran over three live lots for two rounds: three evaluations on the
 first round, none on the second because nothing had moved.
 
-In all 26 evaluations Ember's own read of the page matched the parser on
+In the Nov 23 runs (26 evaluations of the first four lots) Ember's own read of the page matched the parser on
 every money field. Its value estimates move a little from run to run.
 
 The Prius is the case for the second read. On the numbers alone it is a
@@ -243,7 +244,7 @@ install.
 | Page | What it shows |
 |---|---|
 | Overview | What the agent does, the three traps, and where things stand |
-| Demo | An auction that is live right now, then the four demo lots. For each: the listing on PropertyRoom, the command-line run, and the UI run |
+| Demo | An auction that is live right now, then the five demo lots. For each: the listing on PropertyRoom, the command-line run, and the UI run |
 | Lots | Paste a lot link and an all-in max; read the verdict, the bid plan and Ember's reasoning |
 | Policy | The spending gate in order, and your tax, pickup and delivery assumptions |
 | Ledger | Every model call with its tokens and cost, against the $10 |

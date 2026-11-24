@@ -14,6 +14,12 @@ pass --lot <url> to evaluate any other lot, including a live one.
 4. Dell Latitude 7220 Rugged Extreme tablet — an everyday lot: no buyer's
    premium in its auction table, shipped or picked up at a warehouse. Live
    when added (Nov 23, 2026); once it ends the demo runs it as-if-live too.
+5. 50-ft 2" reflective trailer tape — brand new, no buyer's premium, Standard
+   shipping $14.95. The one fixed lot the agent would bid on, verified live
+   Nov 24, 2026: next bid $8.00 lands all-in at $23.75, inside the $30 max,
+   Muse Ember's stance "bid" with a $10–$25 value estimate — BID, proxy
+   maximum $9.00, all-in at most $24.85 (DRY_RUN). The demo's other lots
+   all hold, so without this one a visitor never sees a bid plan.
 """
 
 DEMO_LOTS = [
@@ -36,5 +42,10 @@ DEMO_LOTS = [
         "url": "https://www.propertyroom.com/l/dell-latitude-7220-rugged-extreme-tablet-pc/19039212",
         "label": "Dell Latitude 7220 Rugged Extreme tablet — everyday lot, no buyer's premium",
         "all_in_max": 400.00,
+    },
+    {
+        "url": "https://www.propertyroom.com/l/50-ft-2-reflective-trailer-tape/19045520",
+        "label": "50-ft 2\" reflective trailer tape — brand new, no buyer's premium",
+        "all_in_max": 30.00,
     },
 ]

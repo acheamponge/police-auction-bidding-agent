@@ -165,6 +165,46 @@ const verdictPill = (view) => {
   return el("span", { class: "stamp " + o.stamp, "data-state": o.key }, o.label);
 };
 
+// A verdict is two stages, and the stamp only ever shows the final outcome.
+// Stage 1 is the evaluator's call (BID / NO_BID / HOLD_FOR_HUMAN) with its
+// reason; stage 2 is the spending policy's decision on that call. The stamp
+// is decided by the evaluator — unless the evaluator said BID and the policy
+// gate denied it, in which case the policy decided.
+function decidingStage(view) {
+  const e = view.evaluation;
+  return (e.verdict === "BID" && view.policy_decision !== "DRY_RUN") ? "the spending policy" : "the evaluator";
+}
+
+const stage1Word = (verdict) => verdict === "BID" ? "Bid" : verdict === "NO_BID" ? "No bid" : "Hold for a human";
+const stage2Word = (decision) => decision === "DRY_RUN" ? "Allowed — dry run"
+  : decision === "DENIED" ? "Denied"
+  : decision === "HUMAN_APPROVAL" ? "Needs a human" : "Allowed — live";
+
+function stagesBlock(view) {
+  const e = view.evaluation;
+  // The headroom figure, in words: the highest hammer bid inside the max
+  // against the next bid. A figure like "$5,860 of room" means this gap.
+  const headroom = (e.verdict === "BID" && e.max_hammer !== null && e.next_bid !== null)
+    ? "Headroom: the highest hammer bid inside your max is " + money(e.max_hammer) +
+      "; the next bid is " + money(e.next_bid) +
+      (e.max_hammer > e.next_bid ? " — " + money(e.max_hammer - e.next_bid) + " of room." : ".")
+    : null;
+  return el("div", { class: "stages" },
+    el("div", { class: "stage" },
+      el("div", { class: "eyebrow" }, "Stage 1 · The evaluator"),
+      el("p", {}, el("strong", {}, stage1Word(e.verdict)), " — ", e.reason),
+      headroom && el("p", { class: "muted" }, headroom)),
+    el("div", { class: "stage" },
+      el("div", { class: "eyebrow" }, "Stage 2 · The spending policy"),
+      el("p", {}, el("strong", {}, stage2Word(view.policy_decision)), " — ", view.policy_note)));
+}
+
+function verdictFinal(view) {
+  return el("div", { class: "final" },
+    verdictPill(view),
+    el("div", { class: "final-note" }, "Final outcome · decided by " + decidingStage(view)));
+}
+
 function plan(view) {
   const e = view.evaluation;
   if (e.verdict !== "BID" || e.bid_amount === null) return null;
@@ -173,8 +213,7 @@ function plan(view) {
     el("div", { class: "eyebrow" }, allowed ? "Bid plan · not sent" : "Stopped by the spending policy"),
     el("div", { class: "plan-figure" }, (e.bid_is_proxy ? "Proxy maximum " : "Bid ") + money(e.bid_amount)),
     el("p", { class: "plan-detail" }, "All-in at most " + money(e.all_in_at_bid) + "."),
-    e.bid_note && el("p", { class: "plan-detail" }, e.bid_note),
-    !allowed && el("p", { class: "plan-detail" }, view.policy_note));
+    e.bid_note && el("p", { class: "plan-detail" }, e.bid_note));
 }
 
 function fact(label, value, sub) {
@@ -230,7 +269,7 @@ function flags(e) {
 
 const resultBody = (view) => {
   const e = view.evaluation;
-  return [el("p", { class: "reason" }, e.reason), plan(view), facts(e), ember(e), flags(e)];
+  return [stagesBlock(view), plan(view), facts(e), ember(e), flags(e)];
 };
 
 const lotLink = (url, text) => el("a", { href: url, target: "_blank", rel: "noopener noreferrer" }, text);
@@ -241,10 +280,13 @@ const statusWord = (e) => (e.status === "live" ? "Live" : e.status === "ended" ?
 function renderChrome(state) {
   const live = state.mode === "live";
   for (const pill of document.querySelectorAll(".mode-pill")) {
-    pill.textContent = live ? "live · " + state.model : "fixture mode · no model";
+    // Short on purpose: the full "live · muse-ember-1.0" label made the
+    // header overflow at desktop width and clipped the last nav link. The
+    // detail stays in the title (hover) and in the Mode tile on Overview.
+    pill.textContent = live ? "Live" : "Fixture";
     pill.className = "pill mode-pill " + (live ? "pill-go pill-live" : "pill-cond");
-    pill.title = live ? "Each new or changed lot costs one call to " + state.model + "."
-      : "No API key, or started with --fixture. A local stand-in reads the page: no second opinion, no value estimate.";
+    pill.title = live ? "Live: " + state.model + ". Each new or changed lot costs one call to the model."
+      : "Fixture mode: no model is called. A local stand-in reads the page: no second opinion, no value estimate.";
   }
 }
 
@@ -288,7 +330,7 @@ function renderOverview(state) {
     const checked = state.lots.length - counts.none;
     let eyebrow = "Start here";
     let title = "No lots on your list yet";
-    let note = "Run the demo to watch four real lots go through the agent, or paste a lot link on the Lots page.";
+    let note = "Run the demo to watch five real lots go through the agent, or paste a lot link on the Lots page.";
     if (state.lots.length && !checked) {
       eyebrow = "Waiting on you";
       title = plural(counts.none, "lot") + " on your list, not checked yet";
@@ -393,7 +435,9 @@ function terminalView(lot) {
     el("pre", { class: "terminal-body", tabindex: "0" },
       el("span", { class: "prompt" }, "$ "), el("span", { class: "command" }, command), "\n",
       lot.cli.output ? "\n" + lot.cli.output
-        : el("span", { class: "muted" }, "\nRun the demo to see what this prints.")));
+        : el("span", { class: "muted" }, "\nRun the demo to see what this prints.")),
+    el("p", { class: "terminal-note" },
+      "Both stages are printed here: VERDICT is the evaluator's call, and Policy is the spending gate's decision on it. The stamp in step 03 is the final outcome — the two do not always agree, and that is the point."));
 }
 
 function uiView(lot) {
@@ -402,11 +446,11 @@ function uiView(lot) {
   const final = lot.as_if_live || lot.listed;
   const runs = [el("div", { class: "run" + (lot.as_if_live ? "" : " single") },
     el("div", { class: "run-head" },
-      el("span", { class: "eyebrow" }, "As listed · " + statusWord(lot.listed.evaluation)), verdictPill(lot.listed)),
+      el("span", { class: "eyebrow" }, "As listed · " + statusWord(lot.listed.evaluation)), verdictFinal(lot.listed)),
     resultBody(lot.listed))];
   if (lot.as_if_live) {
     runs.push(el("div", { class: "run" },
-      el("div", { class: "run-head" }, el("span", { class: "eyebrow" }, "As if live"), verdictPill(lot.as_if_live)),
+      el("div", { class: "run-head" }, el("span", { class: "eyebrow" }, "As if live"), verdictFinal(lot.as_if_live)),
       resultBody(lot.as_if_live)));
   }
   return el("article", { class: "card card-accent lot " + outcome(final).card },
@@ -415,7 +459,7 @@ function uiView(lot) {
         el("h3", {}, lot.label),
         el("p", { class: "lot-sub" }, "All-in max " + (lot.all_in_max === null ? "not given" : money(lot.all_in_max)) +
           (lot.live_now ? " · set a quarter above the next bid's all-in for the demo" : ""))),
-      verdictPill(final)),
+      verdictFinal(final)),
     el("div", { class: "runs" }, runs));
 }
 
@@ -454,6 +498,10 @@ function renderDemo(state) {
       el("span", { class: "tab-name" }, lot.label.split(" — ")[0]),
       lot.error ? el("span", { class: "pill verdict pill-nogo" }, "ERROR") : verdictPill(final));
   }));
+  // Keep the selected tab in view: with six lots the strip scrolls, and
+  // the bid plan's tab must not sit hidden off the right edge.
+  const selectedTab = $("demo-tabs").querySelector('[aria-selected="true"]');
+  if (selectedTab) selectedTab.scrollIntoView({ block: "nearest", inline: "nearest" });
 
   const lot = demo.lots[demoSelected];
   $("demo-views").replaceChildren(
@@ -508,7 +556,7 @@ function lotCard(lot) {
       el("div", { class: "lot-title" },
         el("h3", {}, lotLink(lot.url, e.title || lot.url)),
         el("p", { class: "lot-sub" }, lotTag(lot), " — ", statusWord(e))),
-      verdictPill(lot)),
+      verdictFinal(lot)),
     resultBody(lot),
     el("div", { class: "lot-foot" }, maxForm(lot), actions));
 }
@@ -520,6 +568,11 @@ function renderLots(state) {
     ", pickup cost " + (s.pickup_cost_usd === null ? "not set (never pick up)" : money(s.pickup_cost_usd)) +
     ", delivery " + s.shipping_preference + ". Change them on the Policy page." +
     (state.hosted ? " Your lots are kept in this browser, not on the server." : "");
+  $("lots-limits").textContent =
+    "Two limits, and a bid plan must clear both: " + usd.format(state.policy.tx_cap_usd) +
+    " is the most any single transaction can cost all-in (PropertyRoom's card and PayPal ceiling); " +
+    usd.format(state.policy.session_budget_usd) +
+    " is the most this session may spend in total. A bid the evaluator likes can still be stopped by either one.";
   $("lots-title").textContent = "Your lots (" + state.lots.length + ")";
   $("lots").replaceChildren(...(state.lots.length ? state.lots.map(lotCard)
     : [el("div", { class: "card empty" }, "No lots yet. Paste a PropertyRoom lot link above to see what the agent would do.")]));
@@ -621,6 +674,13 @@ function wire() {
         const finals = lastState.demo.lots.map((lot) => lot.as_if_live || lot.listed).filter(Boolean);
         const counts = { bid: 0, hold: 0, nobid: 0 };
         for (const view of finals) { const key = outcome(view).key; if (counts[key] !== undefined) counts[key] += 1; }
+        // The bid plan is the payoff: open on its tab so the BID stamp is
+        // visible without scrolling past all the holds.
+        const bidIndex = lastState.demo.lots.findIndex((lot) => {
+          const final = lot.as_if_live || lot.listed;
+          return final && outcome(final).key === "bid";
+        });
+        if (bidIndex >= 0) { demoSelected = bidIndex; renderDemo(lastState); }
         toast("Demo finished: " + counts.bid + " bid plan" + (counts.bid === 1 ? "" : "s") +
           ", " + counts.hold + " held, " + counts.nobid + " no bid.", "default");
       }

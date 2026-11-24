@@ -85,6 +85,9 @@ PAGES = {
 ASSETS = {
     "/style.css": ("style.css", "text/css; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+    # Theme before first paint: an external file, because the CSP blocks
+    # inline scripts (see public/theme.js).
+    "/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
     # A recording of a real PropertyRoom lot page, so people can see the site.
     "/propertyroom.gif": ("propertyroom.gif", "image/gif"),
 }
