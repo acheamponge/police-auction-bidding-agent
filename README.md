@@ -15,7 +15,7 @@ Solo, virtual, US-only. $5,000 in prizes.
 
 ## The idea
 
-![A PropertyRoom lot page for a 2019 Chevrolet Cruze, scrolling from the photo, current price and 12% buyer's premium down through the description, vehicle details, known defects and pickup rules](web/propertyroom.gif)
+![A PropertyRoom lot page for a 2019 Chevrolet Cruze, scrolling from the photo, current price and 12% buyer's premium down through the description, vehicle details, known defects and pickup rules](public/propertyroom.gif)
 
 *A live lot page on PropertyRoom.com, recorded Nov 23, 2026. This page is all the agent reads. The line naming the high bidder is blurred.*
 
@@ -227,7 +227,7 @@ No bids were placed. No money moved.
 ## The demo UI
 
 ```bash
-python3 app.py          # then open http://127.0.0.1:8765
+python3 ui.py          # then open http://127.0.0.1:8765
 ```
 
 A small dark, multi-page web app over the same agent, for showing it to
@@ -254,16 +254,25 @@ that is live on PropertyRoom's vehicles listing, preferring one that prints
 a buyer's premium, and gives it an all-in max a quarter above what the next
 bid costs.
 
-It is a local demo, not a public site. It listens on `127.0.0.1` only,
-accepts changes only from its own pages, will only fetch PropertyRoom lot
-pages, and is dry-run only: nothing in it can place a bid. Your API key stays
-in the server process; the pages are only told whether a live model is in use.
+Run this way it is a local tool. It listens on `127.0.0.1` only, accepts
+changes only from its own pages, will only fetch PropertyRoom lot pages, and
+is dry-run only: nothing in it can place a bid. Your API key stays in the
+server process; the pages are only told whether a live model is in use.
 
 With a key in `.env` it uses live Muse Ember, at about $0.0008 for each new
 lot or lot whose price or fees changed. Changing your max or your
 assumptions, or re-running the demo, re-works verdicts without another call.
-`python3 app.py --fixture` never calls the model. Your lots are kept in
+`python3 ui.py --fixture` never calls the model. Your lots are kept in
 `watchlist.json`, the same file `watch.py` reads.
+
+### On Vercel
+
+The same UI deploys to Vercel as one Python function plus the `public/`
+folder; [DEPLOY.md](DEPLOY.md) has the steps. Hosted, the server keeps
+nothing between requests, so each visitor's lots and assumptions live in
+their own browser, and the ledger is per server instance. Anyone with the
+link can spend the key you give it, so read the notes there first.
+`python3 ui.py --hosted` runs that mode locally.
 
 ## Run it from the command line
 
@@ -287,7 +296,7 @@ python3 evaluate.py --lot https://www.propertyroom.com/l/.../12345678 --tax-rate
 # Watch lots until they end (copy watchlist.example.json to watchlist.json)
 python3 watch.py --watchlist watchlist.json --interval 300
 
-# Tests (150, no network, no API key)
+# Tests (167, no network, no API key)
 python3 -m unittest discover -s tests
 ```
 
@@ -297,7 +306,7 @@ Python 3.10+, standard library only — no `pip install` needed.
 
 Copy `config.example.json` to `config.json` to set your tax rate, pickup
 cost, shipping preference, default all-in max and policy limits once.
-`evaluate.py`, `watch.py` and `app.py` read it, and any flag on the command
+`evaluate.py`, `watch.py` and `ui.py` read it, and any flag on the command
 line wins over it. `config.json` and `watchlist.json` are git-ignored.
 
 ### Live Muse Ember
@@ -306,7 +315,7 @@ Copy `.env.example` to `.env` and put your key in `MODEL_API_KEY`. The
 scripts read `.env` on their own; a variable already set in your shell wins
 over the file. `.env` is git-ignored.
 
-`evaluate.py`, `watch.py` and `app.py` use the real model whenever a key is
+`evaluate.py`, `watch.py` and `ui.py` use the real model whenever a key is
 present. `run_demo.py` only does when you pass `--live-ember`, so the plain
 demo never spends.
 
@@ -342,7 +351,8 @@ itself, so it always agrees and gives no value estimate.
 | `run_demo.py` | Demo: 4 real lots, as-listed + as-if-live, ledger summary |
 | `evaluate.py` | CLI: evaluate one lot (`--lot URL [--max N] [--tax-rate R] [--pickup-cost C]`) |
 | `watch.py` | CLI: watch lots until they end (`--watchlist FILE` or `--lot URL --max N`) |
-| `app.py` | The demo UI's server (`--port N`, `--fixture`) |
+| `ui.py` | The demo UI's server (`--port N`, `--fixture`, `--hosted`) |
+| `api/index.py` / `vercel.json` | The Vercel entry point and its config; see `DEPLOY.md` |
 | `src/agent.py` | Orchestration: fetch -> Ember -> math -> policy gate |
 | `src/ember_client.py` | Muse Ember client (OpenAI-compatible), pricing, pre-call budget check, fixture mode |
 | `src/cost_ledger.py` | JSONL ledger of every model call + $10 budget wall |
@@ -353,10 +363,10 @@ itself, so it always agrees and gives no value estimate.
 | `src/watcher.py` | The watch loop: re-evaluates a lot only when it changed |
 | `src/demo.py` | The demo run and its assumptions, finding a live auction, and what the command line prints; shared by `run_demo.py` and the UI |
 | `src/web.py` / `src/mini_markdown.py` | The UI's routes and JSON API; renders this README's command-line section into the UI |
-| `web/` | The UI: one shell, a fragment per page, one stylesheet, one script, and the recording of a PropertyRoom lot page shown above |
+| `web/` / `public/` | The UI: one shell and a fragment per page in `web/`; the stylesheet, the script and the recording of a PropertyRoom lot page in `public/` |
 | `src/config.py` / `src/cli.py` | Loads `.env` and `config.json`; flags shared by the scripts |
 | `src/demo_lots.py` | The four demo lots |
-| `tests/` + `tests/fixtures/` | 150 unit tests; fixtures mirror the layout of real lot pages |
+| `tests/` + `tests/fixtures/` | 167 unit tests; fixtures mirror the layout of real lot pages |
 | `config.example.json` / `watchlist.example.json` / `.env.example` | Templates (copy, never commit secrets) |
 | `cost_ledger.jsonl` | Ledger from the demo runs |
 

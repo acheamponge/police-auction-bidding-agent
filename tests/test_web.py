@@ -21,14 +21,15 @@ from src.ember_client import EmberClient
 from src.lot_fetcher import FetchError, html_to_text, parse_lot_text
 from src import mini_markdown
 from src.demo_lots import DEMO_LOTS
-from src.web import PAGES, BadRequest, WebApp, check_lot_url
+from src.web import (HOSTED_MAX_LOTS, PAGES, BadRequest, WebApp, check_lot_url, hosted_app,
+                     requested_path, snap_key)
 
 LOT = "https://www.propertyroom.com/l/2012-honda-civic-test-lot/11111111"   # not one of the demo lots
 OTHER = "https://www.propertyroom.com/l/skullcandy-headphones/19039373"
 LIVE = html_to_text(read_fixture("lot_page.html"))            # live at $800.00, 15% premium
 HIGHER = LIVE.replace("US $800.00", "US $900.00")
 ENDED = LIVE.replace("Ends Nov 30, 2026", "Ended Nov 30, 2026")
-STATIC = os.path.join(os.path.dirname(__file__), "..", "web")
+PROJECT = os.path.join(os.path.dirname(__file__), "..")
 HOSTS = ("127.0.0.1:8765", "localhost:8765")
 
 
@@ -72,14 +73,23 @@ class WebTestCase(unittest.TestCase):
         return {"choices": [{"message": {"content": json.dumps(reply)}}],
                 "usage": {"prompt_tokens": 4000, "completion_tokens": 500}}
 
-    def app(self, live=True, **agent_kwargs):
+    def app(self, live=True, hosted=False, **agent_kwargs):
         ledger = CostLedger(os.path.join(self.dir, "ledger.jsonl"))
         ember = EmberClient(ledger=ledger, api_key="test-key" if live else "",
                             transport=self.transport)
         agent = BiddingAgent(ledger=ledger, ember=ember,
                              **{"tax_rate": 0.10, "pickup_cost_usd": 0.0, **agent_kwargs})
-        return WebApp(agent, self.watchlist, fetch=self.fetch, fetch_html=self.fetch_html,
+        return WebApp(agent, None if hosted else self.watchlist, fetch=self.fetch,
+                      fetch_html=self.fetch_html, hosted=hosted,
                       now=lambda: datetime.datetime(2026, 11, 23, 12, 0, 0))
+
+    def post(self, app, path, body=None, host="127.0.0.1:8765", **headers):
+        """POST JSON straight to an app and return (status, decoded reply)."""
+        headers = {"host": host, "content-type": "application/json", **headers}
+        raw = json.dumps(body or {}).encode("utf-8")
+        allowed = None if app.hosted else HOSTS
+        status, _, payload = app.dispatch("POST", path, headers, raw, allowed, PROJECT)
+        return status, json.loads(payload)
 
     def saved(self):
         with open(self.watchlist, encoding="utf-8") as fh:
@@ -436,6 +446,217 @@ class TestDemoThreeViews(WebTestCase):
         self.assertEqual(lots[0]["as_if_live"]["evaluation"]["verdict"], "BID")
 
 
+class TestHosted(WebTestCase):
+    """On Vercel nothing is kept on the server between requests. A new app
+    answers each one, filled from the session the visitor's browser sends."""
+
+    def test_local_mode_neither_returns_nor_reads_a_session(self):
+        app = self.app(live=False)
+        status, reply = self.post(app, "/api/state", {"session": {
+            "version": 1, "lots": [{"url": OTHER, "all_in_max": 5}]}})
+        self.assertEqual(status, 200)
+        self.assertNotIn("session", reply)
+        self.assertEqual(reply["lots"], [])
+        self.assertFalse(reply["hosted"])
+
+    def test_a_visitors_lots_come_back_through_their_session_with_no_work_redone(self):
+        _, first = self.post(self.app(hosted=True), "/api/lots", {"url": LOT, "all_in_max": 1500})
+        self.assertTrue(first["hosted"])
+        self.assertEqual(first["lots"][0]["evaluation"]["verdict"], "BID")
+        self.assertEqual((len(self.fetches), len(self.model_calls)), (1, 1))
+
+        # A different server instance, days later: only the session connects them.
+        status, second = self.post(self.app(hosted=True), "/api/state", {"session": first["session"]})
+        self.assertEqual(status, 200)
+        self.assertEqual(second["lots"], first["lots"])
+        self.assertEqual((len(self.fetches), len(self.model_calls)), (1, 1))
+
+    def test_a_visitor_with_no_session_sees_an_empty_list_not_someone_elses(self):
+        first_app = self.app(hosted=True)
+        self.post(first_app, "/api/lots", {"url": LOT, "all_in_max": 1500})
+        _, other_visitor = self.post(self.app(hosted=True), "/api/state", {})
+        self.assertEqual(other_visitor["lots"], [])
+        # And nothing was written to disk: a hosted app has no watchlist file.
+        self.assertIsNone(first_app.watchlist_path)
+        self.assertFalse(os.path.exists(self.watchlist))
+
+    def test_reworking_a_verdict_re_reads_the_page_but_reuses_the_models_read(self):
+        _, first = self.post(self.app(hosted=True), "/api/lots", {"url": LOT, "all_in_max": 1500})
+        _, second = self.post(self.app(hosted=True), "/api/lots/max",
+                              {"url": LOT, "all_in_max": 1000, "session": first["session"]})
+        self.assertEqual(second["lots"][0]["evaluation"]["verdict"], "NO_BID")
+        self.assertFalse(second["lots"][0]["used_model"])
+        self.assertEqual((len(self.fetches), len(self.model_calls)), (2, 1))
+        self.assertEqual(second["session"]["lots"][0]["all_in_max"], 1000.0)
+
+    def test_the_model_is_asked_again_when_the_page_changed_since_the_session(self):
+        _, first = self.post(self.app(hosted=True), "/api/lots", {"url": LOT, "all_in_max": 1500})
+        self.pages[LOT] = HIGHER
+        _, second = self.post(self.app(hosted=True), "/api/lots/check",
+                              {"url": LOT, "session": first["session"]})
+        self.assertTrue(second["lots"][0]["used_model"])
+        self.assertEqual(second["lots"][0]["evaluation"]["current_price"], 900.0)
+        self.assertEqual(len(self.model_calls), 2)
+
+    def test_assumptions_travel_in_the_session_and_rework_every_lot(self):
+        _, first = self.post(self.app(hosted=True), "/api/lots", {"url": LOT, "all_in_max": 1500})
+        _, second = self.post(self.app(hosted=True), "/api/settings", {
+            "tax_rate": 0.05, "pickup_cost_usd": 100, "shipping_preference": "pickup",
+            "session": first["session"]})
+        self.assertEqual(second["lots"][0]["evaluation"]["tax_rate"], 0.05)
+        self.assertEqual(second["lots"][0]["evaluation"]["shipping_cost"], 123.95)
+        self.assertEqual(len(self.model_calls), 1)
+        _, third = self.post(self.app(hosted=True), "/api/state", {"session": second["session"]})
+        self.assertEqual(third["settings"], {"tax_rate": 0.05, "pickup_cost_usd": 100.0,
+                                             "shipping_preference": "pickup"})
+
+    def test_session_carries_no_key_and_no_page_text(self):
+        _, reply = self.post(self.app(hosted=True), "/api/lots", {"url": LOT, "all_in_max": 1500})
+        session = json.dumps(reply["session"])
+        self.assertNotIn("test-key", session)
+        self.assertNotIn("Will the Item Start?", session)       # a line of the lot page
+        self.assertLess(len(session), 40_000)
+
+    def test_a_tampered_session_is_cut_down_to_what_checks_out(self):
+        junk = {"version": 1,
+                "settings": {"tax_rate": 9, "pickup_cost_usd": -4, "shipping_preference": "teleport"},
+                "lots": [{"url": "https://evil.example/l/a/1", "all_in_max": 5},
+                         {"url": "http://127.0.0.1:8765/api/state"},
+                         "not a lot", 7, None,
+                         {"url": OTHER, "all_in_max": "lots"},
+                         {"url": LOT, "all_in_max": 1500, "view": "<script>", "snap": 5,
+                          "ember_result": {"judgment": ["bid"]}, "error": {"x": 1},
+                          "checked_at": 12, "used_model": "yes"},
+                         {"url": LOT, "all_in_max": 2}],
+                "demo": {"ran_at": 5, "live": {"lot": {"url": "https://evil.example/l/a/1"}},
+                         "entries": [{"lot": {"url": DEMO_LOTS[0]["url"], "all_in_max": 1,
+                                              "label": "tampered"},
+                                      "listed": "x", "reads": [], "cli_output": {"a": 1}}, 3]}}
+        status, reply = self.post(self.app(hosted=True), "/api/state", {"session": junk})
+        self.assertEqual(status, 200)
+        self.assertEqual(reply["settings"]["tax_rate"], 0.10)            # the bad settings were left out
+        self.assertEqual([lot["url"] for lot in reply["lots"]], [LOT])   # one valid lot, once
+        self.assertIsNone(reply["lots"][0]["evaluation"])
+        self.assertIsNone(reply["lots"][0]["error"])
+        self.assertEqual(len(reply["demo"]["lots"]), 4)                  # no forged live lot
+        self.assertEqual(reply["demo"]["lots"][0]["label"], DEMO_LOTS[0]["label"])
+        self.assertEqual(reply["demo"]["lots"][0]["all_in_max"], DEMO_LOTS[0]["all_in_max"])
+        self.assertIsNone(reply["demo"]["lots"][0]["listed"])
+        self.assertEqual(self.fetches, [])                               # and nothing was fetched
+        # The misshapen model read was dropped, so the model is asked afresh.
+        _, checked = self.post(self.app(hosted=True), "/api/lots/check",
+                               {"url": LOT, "session": reply["session"]})
+        self.assertEqual(checked["lots"][0]["evaluation"]["verdict"], "BID")
+        self.assertEqual(len(self.model_calls), 1)
+
+    def test_one_bad_setting_keeps_the_whole_set_out(self):
+        good = {"tax_rate": 0.05, "pickup_cost_usd": 20, "shipping_preference": "standard"}
+        for field, bad in (("tax_rate", 9), ("tax_rate", "0.05"), ("pickup_cost_usd", -4),
+                           ("shipping_preference", "teleport"), ("shipping_preference", None)):
+            with self.subTest(field=field, bad=bad):
+                _, reply = self.post(self.app(hosted=True), "/api/state", {
+                    "session": {"version": 1, "settings": {**good, field: bad}}})
+                self.assertEqual(reply["settings"], {"tax_rate": 0.10, "pickup_cost_usd": 0.0,
+                                                     "shipping_preference": "cheapest"})
+        _, reply = self.post(self.app(hosted=True), "/api/state",
+                             {"session": {"version": 1, "settings": good}})
+        self.assertEqual(reply["settings"], {"tax_rate": 0.05, "pickup_cost_usd": 20.0,
+                                             "shipping_preference": "standard"})
+
+    def test_a_misshapen_model_read_is_dropped_even_when_the_page_is_unchanged(self):
+        # The page matches what the session says it saw, so a stored read
+        # would be reused. This one would crash the evaluator, so it is not.
+        unchanged = snap_key(parse_lot_text(LIVE))
+        for read in ({"judgment": ["bid"]}, {"shipping_options": "none"},
+                     {"estimated_value_usd": [1, 2]}, {"_meta": "x"}, ["not", "a", "read"], "bid"):
+            with self.subTest(read=read):
+                self.model_calls.clear()
+                _, reply = self.post(self.app(hosted=True), "/api/lots/check", {
+                    "url": LOT, "session": {"version": 1, "lots": [{
+                        "url": LOT, "all_in_max": 1500, "snap": unchanged, "ember_result": read}]}})
+                self.assertEqual(reply["lots"][0]["evaluation"]["verdict"], "BID")
+                self.assertEqual(len(self.model_calls), 1)
+
+    def test_sessions_of_any_other_shape_are_ignored(self):
+        for session in (None, "x", 5, [], {"version": 2, "lots": [{"url": LOT}]}, {"lots": [{"url": LOT}]}):
+            with self.subTest(session=session):
+                status, reply = self.post(self.app(hosted=True), "/api/state", {"session": session})
+                self.assertEqual((status, reply["lots"]), (200, []))
+
+    def test_a_hosted_list_is_capped(self):
+        lots = [{"url": f"https://www.propertyroom.com/l/lot/{n}"} for n in range(HOSTED_MAX_LOTS + 5)]
+        _, reply = self.post(self.app(hosted=True), "/api/state", {"session": {"version": 1, "lots": lots}})
+        self.assertEqual(len(reply["lots"]), HOSTED_MAX_LOTS)
+        status, refused = self.post(self.app(hosted=True), "/api/lots",
+                                    {"url": LOT, "session": reply["session"]})
+        self.assertEqual(status, 400)
+        self.assertIn("up to 12 lots", refused["error"])
+        self.assertEqual(self.fetches, [])
+
+    def test_hosted_answers_on_any_host_name_but_only_to_its_own_pages(self):
+        app = self.app(hosted=True, live=False)
+        host = "police-auction.example.app"
+        same = self.post(app, "/api/state", {}, host=host, origin="https://" + host)
+        foreign = self.post(app, "/api/state", {}, host=host, origin="https://evil.example")
+        self.assertEqual((same[0], foreign[0]), (200, 403))
+        status, content_type, page = app.dispatch("GET", "/demo", {"host": host}, b"", None, PROJECT)
+        self.assertEqual((status, content_type), (200, "text/html; charset=utf-8"))
+        self.assertIn(b'<body data-page="demo" data-hosted="true">', page)
+
+    def test_demo_runs_one_step_per_request_and_builds_up_through_the_session(self):
+        self.list_lots(LOT)
+        session = None
+        for step in ("live", 0, 1, 2, 3):
+            status, reply = self.post(self.app(hosted=True, live=False), "/api/demo/run",
+                                      {"step": step, "session": session})
+            self.assertEqual(status, 200)
+            session = reply["session"]
+        lots = reply["demo"]["lots"]
+        self.assertEqual(len(lots), 5)
+        self.assertTrue(lots[0]["live_now"])
+        self.assertEqual(lots[0]["url"], LOT)
+        self.assertEqual(lots[0]["listed"]["evaluation"]["verdict"], "BID")
+        self.assertTrue(all(lot["listed"] and lot["listing"] and lot["cli"]["output"] for lot in lots))
+        self.assertEqual(lots[4]["as_if_live"]["evaluation"]["status"], "live")
+        self.assertEqual(len(self.fetches), 1 + 1 + 4)      # find the live lot, run it, run four
+        self.assertEqual(len(self.html_fetches), 1)
+
+    def test_one_demo_step_touches_only_its_own_lot(self):
+        app = self.app(live=False)
+        app.run_demo(2)
+        lots = app.state()["demo"]["lots"]
+        self.assertEqual([bool(lot["listed"]) for lot in lots], [False, False, True, False])
+        self.assertEqual(self.html_fetches, [])             # a fixed-lot step does not go looking
+        for bad in (4, -1, "all", 1.5, True, [0]):
+            with self.subTest(step=bad):
+                with self.assertRaises(BadRequest):
+                    app.run_demo(bad)
+
+    def test_requested_path_is_read_from_the_rewrite_or_taken_as_given(self):
+        for raw, wanted in (("/api/index?p=demo", "/demo"), ("/api/index?p=", "/"),
+                            ("/api/index", "/"), ("/api/index/?p=lots", "/lots"),
+                            ("/api/index?p=api/lots/check", "/api/lots/check"),
+                            ("/api/index?p=/policy", "/policy"),
+                            ("/demo", "/demo"), ("/", "/"), ("/api/lots?x=1", "/api/lots")):
+            with self.subTest(raw=raw):
+                self.assertEqual(requested_path(raw), wanted)
+
+    def test_hosted_app_starts_empty_with_demo_tax_and_a_ledger_in_temp_space(self):
+        import tempfile
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"MODEL_API_KEY": "k", "MODEL_BUDGET_USD": "2.5"}):
+            live = hosted_app()
+            forced_fixture = hosted_app(fixture=True)
+        self.assertTrue(live.hosted and live.agent.ember.live)
+        self.assertFalse(forced_fixture.agent.ember.live)
+        self.assertEqual(live.agent.tax_rate, 0.10)
+        self.assertIsNone(live.agent.pickup_cost_usd)
+        self.assertEqual(live.agent.ledger.budget_usd, 2.5)
+        self.assertTrue(live.agent.ledger.path.startswith(tempfile.gettempdir()))
+        self.assertIsNone(live.watchlist_path)
+        self.assertEqual(live.lots, [])
+
+
 class TestMiniMarkdown(unittest.TestCase):
     def test_section_is_cut_at_the_next_second_level_heading(self):
         text = "# T\n\n## One\nalpha\n\n### Sub\nbeta\n\n## Two\ngamma\n"
@@ -476,7 +697,7 @@ class TestDispatch(WebTestCase):
         if body is not None and "content-type" not in headers:
             headers["content-type"] = "application/json"
         raw = json.dumps(body).encode("utf-8") if isinstance(body, (dict, list)) else (body or b"")
-        status, content_type, payload = app.dispatch(method, path, headers, raw, HOSTS, STATIC)
+        status, content_type, payload = app.dispatch(method, path, headers, raw, HOSTS, PROJECT)
         return status, content_type, payload
 
     def test_every_page_is_the_shell_around_its_own_fragment(self):
@@ -487,7 +708,7 @@ class TestDispatch(WebTestCase):
                 status, content_type, payload = self.request(app, "GET", path)
                 page = payload.decode("utf-8")
                 self.assertEqual((status, content_type), (200, "text/html; charset=utf-8"))
-                self.assertIn(f'<body data-page="{name}">', page)
+                self.assertIn(f'<body data-page="{name}" data-hosted="false">', page)
                 self.assertIn(f"<title>{title} · Police Auction Bidding Agent</title>", page)
                 self.assertIn('data-nav="cli"', page)        # the shared nav
                 self.assertNotIn("{{", page)                   # nothing left unfilled
@@ -523,8 +744,9 @@ class TestDispatch(WebTestCase):
 
     def test_only_the_listed_files_can_be_read(self):
         app = self.app(live=False)
-        for path in ("/../README.md", "/..%2f.env", "/.env", "/app.py", "/index.html", "/shell.html",
-                     "/pages/lots.html", "/api/nope"):
+        for path in ("/../README.md", "/..%2f.env", "/.env", "/ui.py", "/index.html", "/shell.html",
+                     "/pages/lots.html", "/vercel.json", "/src/web.py", "/cost_ledger.jsonl",
+                     "/api/nope"):
             with self.subTest(path=path):
                 self.assertEqual(self.request(app, "GET", path)[0], 404)
 

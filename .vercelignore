@@ -1,0 +1,7 @@
+# Never upload local secrets, personal lists or run records to a deployment.
+.env
+config.json
+watchlist.json
+cost_ledger.jsonl
+tests
+__pycache__

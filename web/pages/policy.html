@@ -18,12 +18,12 @@
           <li><b>Dry-run.</b> What passes is printed as the bid it would place, and stops there. This UI has no live mode.</li>
         </ol>
         <p class="note">A proxy bid is judged at its maximum, not at the next increment, and its maximum is sized to fit what the gate has left. <span id="rule-reserve"></span></p>
-        <p class="note">The cap, the session budget and the reserve setting come from <code>config.json</code>.</p>
+        <p id="policy-source" class="note">The cap, the session budget and the reserve setting come from <code>config.json</code>.</p>
       </section>
 
       <section class="card pad" aria-labelledby="settings-title">
         <h2 id="settings-title" class="card-title">Your assumptions</h2>
-        <p class="note first">Changing these re-works every verdict on the Lots page without calling the model. They last until you stop the app; put them in <code>config.json</code> to keep them.</p>
+        <p class="note first">Changing these re-works every verdict on the Lots page without calling the model. <span id="settings-kept">They last until you stop the app; put them in <code>config.json</code> to keep them.</span></p>
         <form id="settings-form" class="form-col">
           <label class="field">
             <span>Sales tax rate</span>

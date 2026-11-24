@@ -5,6 +5,27 @@
 "use strict";
 
 const PAGE = document.body.dataset.page;
+// Hosted (on Vercel) the server keeps nothing between requests: this
+// visitor's lots and verdicts live in this browser and go along with every
+// request as a session. Locally the server holds them.
+const HOSTED = document.body.dataset.hosted === "true";
+const SESSION_KEY = "police-auction-agent-session-v1";
+
+function loadSession() {
+  try {
+    return JSON.parse(localStorage.getItem(SESSION_KEY)) || null;
+  } catch (error) {
+    return null;      // storage unavailable or damaged: start fresh
+  }
+}
+
+function saveSession(session) {
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  } catch (error) {
+    // Private windows and full storage: the page still works for this visit.
+  }
+}
 const $ = (id) => document.getElementById(id);
 const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 const money = (n) => (n === null || n === undefined ? "not read" : usd.format(n));
@@ -45,6 +66,10 @@ async function send(path, body, working) {
   if (busy) return false;
   setBusy(true);
   setStatus(working);
+  if (HOSTED) {
+    // Even reading the state is a POST here: the state is in the session.
+    body = { ...(body || {}), session: loadSession() };
+  }
   try {
     const response = await fetch(path, {
       method: body === undefined ? "GET" : "POST",
@@ -56,12 +81,14 @@ async function send(path, body, working) {
       setStatus(data.error || "Something went wrong.", true);
       return false;
     }
+    if (data.session) saveSession(data.session);
     setBusy(false);
     render(data);
     setStatus("");
     return true;
   } catch (error) {
-    setStatus("Could not reach the app. Is `python3 app.py` still running?", true);
+    setStatus(HOSTED ? "Could not reach the server. Try again in a moment."
+      : "Could not reach the app. Is `python3 ui.py` still running?", true);
     return false;
   } finally {
     setBusy(false);
@@ -443,7 +470,8 @@ function renderLots(state) {
   $("lots-assumptions").textContent =
     "Using your assumptions: tax " + (s.tax_rate === null ? "not set (every lot will be held)" : (s.tax_rate * 100).toFixed(2) + "%") +
     ", pickup cost " + (s.pickup_cost_usd === null ? "not set (never pick up)" : money(s.pickup_cost_usd)) +
-    ", delivery " + s.shipping_preference + ". Change them on the Policy page.";
+    ", delivery " + s.shipping_preference + ". Change them on the Policy page." +
+    (state.hosted ? " Your lots are kept in this browser, not on the server." : "");
   $("lots-title").textContent = "Your lots (" + state.lots.length + ")";
   $("lots").replaceChildren(...(state.lots.length ? state.lots.map(lotCard)
     : [el("div", { class: "card empty" }, "No lots yet. Paste a PropertyRoom lot link above to see what the agent would do.")]));
@@ -463,6 +491,10 @@ function renderPolicy(state) {
   $("rule-reserve").textContent = policy.allow_reserve_lots
     ? "Reserve lots are allowed, and get a plain bid instead of a proxy."
     : "Reserve lots are held for you.";
+  if (state.hosted) {
+    $("policy-source").textContent = "The cap, the session budget and the reserve setting are the project's defaults here. Run it locally to set your own in config.json.";
+    $("settings-kept").textContent = "They are kept in this browser.";
+  }
   if (!settingsShown) {
     const s = state.settings;
     $("set-tax").value = s.tax_rate === null ? "" : +(s.tax_rate * 100).toFixed(4);
@@ -487,6 +519,7 @@ function renderLedger(state) {
   const average = evaluations.length
     ? evaluations.reduce((sum, entry) => sum + entry.cost_usd, 0) / evaluations.length : null;
   const share = Math.min(100, (ledger.total_spent_usd / ledger.budget_usd) * 100);
+  $("ledger-hosted").hidden = !state.hosted;
 
   $("ledger-kpis").replaceChildren(
     kpi("Spent", small(ledger.total_spent_usd), "of " + usd.format(ledger.budget_usd)),
@@ -524,8 +557,18 @@ function render(state) {
 
 function wire() {
   if (PAGE === "demo") {
-    $("demo-run").addEventListener("click", () => send("/api/demo/run", {},
-      "Fetching the lot pages and working out verdicts. On the live model this can take up to a minute…"));
+    // One lot per request: each stays short, and results appear as they come.
+    $("demo-run").addEventListener("click", async () => {
+      const fixed = lastState ? lastState.demo.lots.filter((lot) => !lot.live_now).length : 4;
+      const steps = ["live", ...Array.from({ length: fixed }, (unused, index) => index)];
+      for (const [position, step] of steps.entries()) {
+        const working = step === "live"
+          ? "Looking for an auction that is live on PropertyRoom right now…"
+          : "Running lot " + (position + 1) + " of " + steps.length + "…";
+        if (!(await send("/api/demo/run", { step }, working))) break;
+        if (step === "live") demoSelected = 0;
+      }
+    });
   }
   if (PAGE === "lots") {
     $("add-form").addEventListener("submit", async (event) => {
