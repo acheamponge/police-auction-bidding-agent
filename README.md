@@ -166,10 +166,28 @@ evaluations of seven real lots):
 | output (Ember's thinking + its JSON reply) | 573 to 1,035 | $0.00029 to $0.00052 |
 | **per evaluation** | | **$0.0004 to $0.00096, average $0.0008** |
 
-**$10 buys roughly 12,500 evaluations.** A full auction watch — say 200
-lots a day for the 10-day build window — is about $1.60 even if every lot
-changed on every check, and less in practice because unchanged lots are
-not re-sent.
+With photos, measured on the live demo runs of Nov 24, 2026 (24
+evaluations, each sending the lot's own photos, up to 6):
+
+| | tokens | cost |
+|---|---|---|
+| input (instructions + page text + photos) | 5,151 to 12,006 | $0.00002 to $0.00120 |
+| output (Ember's thinking + its JSON reply, now including photo notes) | 721 to 1,202 | $0.00036 to $0.00060 |
+| **per evaluation with photos** | | **$0.00043 to $0.00176, average about $0.0012** |
+
+Each photo adds about 1,000 input tokens (the Impala: 5,699 text-only to
+11,897 with six photos). The wide cost range is prompt caching: a repeat or
+near-identical prompt (the as-if-live second run of the same lot) is billed
+at the $0.004/1M cached rate and lands near $0.0005, while a first call with
+a new prompt shape lands near $0.0016. The pre-call budget check still
+prices every photo at a 4,000-token allowance, about four times the measured
+cost, so the $10 wall holds with margin.
+
+**$10 buys roughly 8,500 evaluations with photos** (about 12,500 text-only).
+A full auction watch — say 200 lots a day for the 10-day build window — is
+about $2.40 even if every lot changed on every check, and less in practice
+because unchanged lots are not re-sent. A full demo run (one live auction
+plus seven fixed lots, 12 calls with photos) costs about $0.012.
 
 Muse Ember is a reasoning model: its thinking is billed as output and
 counts against the output cap. The client asks for `reasoning_effort: low`
@@ -194,7 +212,7 @@ running total, including runs made from the UI since.
 Run Nov 23, 2026 on live Muse Ember, against real lot pages fetched at run
 time. Assumptions: 10% tax, $0 pickup cost (a local buyer).
 
-`python3 run_demo.py --live-ember` evaluates five real lots. The four that
+`python3 run_demo.py --live-ember` evaluates seven real lots. The four that
 have ended are each run twice: as listed, and "as-if-live" (the "Ended" line
 rewritten to "Ends", fee data untouched) so the paths past "auction ended"
 are exercised.
@@ -206,6 +224,31 @@ are exercised.
 | 2007 Toyota Prius, ended $800, max $1,500 | 15% | $850 -> $1,099.20 | NO_BID (ended) | **HOLD_FOR_HUMAN** — math clears, Ember objects | Salvage title; start/run, key and mileage all unknown. Worth $400 to $1,200 |
 | Dell Latitude 7220 tablet, live at $181, max $400 | none | $184 -> $214.35 | **HOLD_FOR_HUMAN** — math clears, Ember objects | (still live) | Powers on, but no power adapter and no Windows key. Worth $200 to $350 |
 | 50-ft reflective trailer tape, live at $5, max $30 (verified Nov 24, 2026) | none | $8 -> $23.75 | **BID** — proxy maximum $9.00, all-in at most $24.85 (DRY_RUN) | (still live) | Brand new, stance "bid". Worth $10 to $25 |
+
+Run Nov 24, 2026 on live Muse Ember, with photos (12 calls, $0.0117). The
+demo is now seven fixed lots plus the live pick; the tape flipped from BID
+to HOLD because Ember now reads its photos, and the Cruze below is the
+fixed lot that bids.
+
+| Lot | Premium (read) | Next bid -> all-in | As listed | As-if-live | What Ember saw (text + photos) |
+|---|---|---|---|---|---|
+| Live pick: 2019 Chevrolet Cruze LS, live at $3,750, max $5,860 | 12% | $3,800 -> $4,681.60 | **BID** — plain bid $3,800; policy DENIED (over the $2,000 session budget) | — | Starts and runs, key, regular title; photos show a clean car, minor scratches/dents. Worth $4,500 to $6,500 |
+| 2019 Ford F-150, ended $10,850, max $13,500 | 12% | $10,900 -> $13,428.80 | NO_BID (ended) | **HOLD_FOR_HUMAN** — Ember objects | Will not start or run, 999,999 mileage; photos confirm no-start and an unbolted bench seat. Worth $7,000 to $11,000 |
+| 2014 Chevrolet Caprice, ended $4,450, max $6,000 | 15% | $4,500 -> $5,716.45 | NO_BID (ended) | **HOLD_FOR_HUMAN** — reserve not met | Starts and runs, key, regular title: stance "bid". Photos show an intact car, no damage contradicting the listing. Worth $3,500 to $6,000 |
+| 2007 Toyota Prius, ended $800, max $1,500 | 15% | $850 -> $1,099.20 | NO_BID (ended) | **HOLD_FOR_HUMAN** — Ember objects | Salvage title; start/run, key and mileage all unknown. Photos show rear plate-area damage. Worth $500 to $1,500 |
+| Dell Latitude 7220 tablet, ended at $229, max $400 | none | $232 -> $267.15 | NO_BID (ended) | **HOLD_FOR_HUMAN** — Ember objects | Powers on, but no power adapter and no Windows key. Photos show fair cosmetic condition, consistent with the listing. Worth $225 to $375 |
+| 50-ft reflective trailer tape, live at $5, max $30 | none | $8 -> $23.75 | **HOLD_FOR_HUMAN** — Ember objects | (still live) | **Photos:** stock graphics, not the actual roll; graphic says 49.2 ft against the listed 50 ft. Worth $10 to $20 |
+| 2015 Chevrolet Impala, live at $2,850, max $4,500 | 12% | $2,900 -> $3,572.80 | **HOLD_FOR_HUMAN** — Ember objects | (still live) | **Photos:** windshield notes "Requiring Jump" and "Coolant leak" contradict the listing's start/run claim. Worth $3,000 to $5,000 |
+| 2019 Chevrolet Cruze LS, live at $3,000, max $5,500 | 12% | $3,050 -> $3,757.60 | **BID** — plain bid $3,050; policy DENIED (over the $2,000 session budget) | (still live) | Starts and runs, key, regular title; photos show a clean car, minor scratches/dents, matching the listing. Worth $5,500 to $7,500 |
+
+Two notes on that run. The Cruze that bids is a plain bid, not a proxy:
+the next bid's all-in is already over what the demo's $2,000 session
+budget has left, so there is no room for a proxy maximum — and the policy
+gate denies it on the same budget, which is the gate doing its job. A
+sub-$2,000 lot that clears would show the fully clean BID (DRY_RUN); the
+tape was that lot until its photos held it. And the Impala's windshield
+notes appear nowhere in the page text: the photo read is the only place
+they exist in the evaluation.
 
 A vehicle that was really live at the time, through `evaluate.py` with a
 $5,000 max:
