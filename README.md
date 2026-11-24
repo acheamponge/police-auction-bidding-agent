@@ -400,6 +400,15 @@ itself, so it always agrees and gives no value estimate.
   itself is intentionally not wired up (it needs an authenticated session
   for a real registered account). Nothing in this codebase can charge a card.
 
+**Terms.** This is an evaluate-only research demo. It reads public lot
+listings and photos, places no bids, holds no login session, and collects
+no user data. PropertyRoom's User Agreement contains no express ban on
+automated reading, but Section 20 limits access to the interface
+PropertyRoom provides, so live bidding is deliberately unwired: any future
+bid would go through PropertyRoom's own proxy bidding, under the user's
+account, with an explicit per-lot maximum. Bids on PropertyRoom are binding
+and auto-charged, which is why the demo defaults to dry-run.
+
 ## Files
 
 | Path | What it is |
